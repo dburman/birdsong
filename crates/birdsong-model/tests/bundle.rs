@@ -98,11 +98,29 @@ fn bundle_with_static_species_list() -> anyhow::Result<()> {
     let cfg = config(&models_dir, Some(&list));
     let bundle = ModelBundle::load(&cfg)?;
     let filter = bundle.species_filter_for_week(20)?;
-    let expected = std::fs::read_to_string(&list)?
+    // The fixture comes from a newer BirdNET-Analyzer whose taxonomy differs slightly from the
+    // V2.4 labels (e.g. Astur cooperii); only names the label file knows count.
+    let text = std::fs::read_to_string(&list)?;
+    let names: Vec<&str> = text
         .lines()
-        .filter(|l| !l.trim().is_empty())
+        .map(str::trim)
+        .filter(|l| !l.is_empty())
+        .collect();
+    let known = names
+        .iter()
+        .filter(|l| {
+            bundle
+                .labels
+                .index_of_scientific(l.split_once('_').map_or(l, |(s, _)| s))
+                .is_some()
+        })
         .count();
-    assert_eq!(filter.num_allowed(), expected);
+    assert!(
+        known > names.len() / 2,
+        "most fixture names should be known: {known}/{}",
+        names.len()
+    );
+    assert_eq!(filter.num_allowed(), known);
     Ok(())
 }
 

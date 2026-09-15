@@ -36,22 +36,45 @@ impl SpeciesFilter {
     }
 
     /// Allowed = species listed in a text file, one `Scientific name` or `Scientific name_Common name`
-    /// per line (`#` comments and blank lines ignored). Unknown names are an error.
+    /// per line (`#` comments and blank lines ignored).
+    ///
+    /// Names the label file does not know are skipped with a warning rather than rejected:
+    /// species lists are often produced by newer tools whose taxonomy has moved on (for example
+    /// `Astur cooperii` for what BirdNET V2.4 still calls `Accipiter cooperii`). A file that
+    /// matches nothing at all is an error, since it would silence every detection.
     pub fn from_list_file(path: &Path, labels: &Labels) -> Result<Self, ModelError> {
         let text = std::fs::read_to_string(path).map_err(|e| ModelError::io(path, e))?;
         Self::from_list_text(&text, labels, &path.display().to_string())
     }
 
     pub fn from_list_text(text: &str, labels: &Labels, context: &str) -> Result<Self, ModelError> {
-        let names: Vec<String> = text
-            .lines()
-            .map(|l| l.trim())
-            .filter(|l| !l.is_empty() && !l.starts_with('#'))
-            .map(|l| l.split_once('_').map_or(l, |(s, _)| s).to_string())
-            .collect();
         let mut f = Self::allow_none(labels.len());
-        for i in labels.indices_for(&names, context)? {
-            f.allowed[i] = true;
+        let mut unknown = Vec::new();
+        let mut listed = 0usize;
+        for line in text
+            .lines()
+            .map(str::trim)
+            .filter(|l| !l.is_empty() && !l.starts_with('#'))
+        {
+            listed += 1;
+            let scientific = line.split_once('_').map_or(line, |(s, _)| s);
+            match labels.index_of_scientific(scientific) {
+                Some(i) => f.allowed[i] = true,
+                None => unknown.push(scientific.to_string()),
+            }
+        }
+        if !unknown.is_empty() {
+            tracing::warn!(
+                context,
+                skipped = unknown.len(),
+                names = ?unknown,
+                "species list names not in the label file were skipped"
+            );
+        }
+        if listed > 0 && f.num_allowed() == 0 {
+            return Err(ModelError::Config(format!(
+                "species list {context}: none of its {listed} names match the label file"
+            )));
         }
         Ok(f)
     }
@@ -110,7 +133,16 @@ mod tests {
         assert!(!f.is_allowed(0) && f.is_allowed(1) && f.is_allowed(2));
         assert_eq!(f.num_allowed(), 2);
         assert!(!f.is_allowed(99));
+        // Unknown names are skipped, unless nothing matches at all.
+        let f = SpeciesFilter::from_list_text("Zzz_zzz\nA_a", &l, "test").unwrap();
+        assert_eq!(f.num_allowed(), 1);
         assert!(SpeciesFilter::from_list_text("Zzz_zzz", &l, "test").is_err());
+        assert_eq!(
+            SpeciesFilter::from_list_text("", &l, "test")
+                .unwrap()
+                .num_allowed(),
+            0
+        );
     }
 
     #[test]
