@@ -681,3 +681,48 @@ async fn served_over_a_real_socket_and_shuts_down() {
         .unwrap();
     let _ = PathBuf::new();
 }
+
+#[tokio::test]
+async fn dashboard_assets_are_served() {
+    let env = env().await;
+    let (status, headers, body) = send(&env.router, "/", &[]).await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(headers[header::CONTENT_TYPE], "text/html; charset=utf-8");
+    let html = String::from_utf8(body).unwrap();
+    assert!(
+        html.contains("<title>Birdsong</title>")
+            && html.contains("app.js")
+            && html.contains("style.css")
+    );
+
+    for (path, mime, marker) in [
+        ("/app.js", "text/javascript; charset=utf-8", "EventSource"),
+        (
+            "/style.css",
+            "text/css; charset=utf-8",
+            "prefers-color-scheme",
+        ),
+        ("/favicon.svg", "image/svg+xml", "<svg"),
+    ] {
+        let (status, headers, body) = send(&env.router, path, &[]).await;
+        assert_eq!(status, StatusCode::OK, "{path}");
+        assert_eq!(headers[header::CONTENT_TYPE], mime, "{path}");
+        assert_eq!(headers[header::CACHE_CONTROL], "no-store", "{path}");
+        assert!(String::from_utf8(body).unwrap().contains(marker), "{path}");
+    }
+
+    let (status, headers, _) = send(&env.router, "/app.js", &[("accept-encoding", "gzip")]).await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(
+        headers[header::CONTENT_ENCODING],
+        "gzip",
+        "text assets are compressed"
+    );
+    assert_error(
+        &env.router,
+        "/missing.html",
+        StatusCode::NOT_FOUND,
+        "/missing.html",
+    )
+    .await;
+}

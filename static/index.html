@@ -1,0 +1,88 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Birdsong</title>
+  <link rel="icon" href="favicon.svg" type="image/svg+xml">
+  <link rel="stylesheet" href="style.css">
+  <script src="app.js" defer></script>
+</head>
+<body>
+  <header class="top">
+    <div class="brand">
+      <img src="favicon.svg" alt="" width="28" height="28">
+      <h1 id="station">Birdsong</h1>
+    </div>
+    <div id="status" class="status" role="status" aria-live="polite">Connecting…</div>
+  </header>
+
+  <main class="grid">
+    <section class="card" aria-labelledby="latest-title">
+      <div class="card-head">
+        <h2 id="latest-title">Latest birds</h2>
+        <div class="segmented" role="group" aria-label="Time window" id="window-buttons">
+          <button type="button" data-window="1h">1h</button>
+          <button type="button" data-window="6h">6h</button>
+          <button type="button" data-window="24h" aria-pressed="true">24h</button>
+          <button type="button" data-window="7d">7d</button>
+          <button type="button" data-window="30d">30d</button>
+        </div>
+      </div>
+      <div id="latest-chart" class="chart" aria-live="polite"></div>
+    </section>
+
+    <section class="card" aria-labelledby="daily-title">
+      <div class="card-head">
+        <h2 id="daily-title">By hour</h2>
+        <input type="date" id="daily-date" aria-label="Day to show">
+      </div>
+      <div id="daily-chart" class="chart"></div>
+      <ul id="daily-legend" class="legend"></ul>
+    </section>
+
+    <section class="card wide" aria-labelledby="detections-title">
+      <div class="card-head">
+        <h2 id="detections-title">Recent detections</h2>
+        <span id="live" class="live" data-state="connecting">connecting</span>
+      </div>
+      <div class="table-wrap">
+        <table id="detections">
+          <thead>
+            <tr><th scope="col">Time</th><th scope="col">Species</th><th scope="col">Confidence</th><th scope="col">Recording</th></tr>
+          </thead>
+          <tbody></tbody>
+        </table>
+      </div>
+      <p id="detections-empty" class="empty" hidden>No detections yet. New ones appear here as they happen.</p>
+    </section>
+
+    <section class="card wide" aria-labelledby="species-title">
+      <div class="card-head">
+        <h2 id="species-title">Species</h2>
+        <span id="species-count" class="muted"></span>
+      </div>
+      <div class="table-wrap">
+        <table id="species">
+          <thead>
+            <tr><th scope="col">Species</th><th scope="col" class="num">Detections</th><th scope="col">Last seen</th><th scope="col" class="num">Best</th><th scope="col">Best recording</th></tr>
+          </thead>
+          <tbody></tbody>
+        </table>
+      </div>
+      <p id="species-empty" class="empty" hidden>No species recorded yet.</p>
+    </section>
+  </main>
+
+  <dialog id="viewer" aria-labelledby="viewer-title">
+    <form method="dialog" class="viewer-close"><button aria-label="Close">×</button></form>
+    <h3 id="viewer-title"></h3>
+    <p id="viewer-meta" class="muted"></p>
+    <img id="viewer-image" alt="Spectrogram of the recording" width="800" height="300">
+    <p id="viewer-noimage" class="muted" hidden>No spectrogram for this recording.</p>
+    <audio id="viewer-audio" controls preload="none"></audio>
+  </dialog>
+
+  <audio id="player" preload="none"></audio>
+</body>
+</html>

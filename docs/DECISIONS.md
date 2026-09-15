@@ -218,3 +218,15 @@ One entry per non-obvious decision. Newest at the bottom. Format: Decision / Why
   time.
 - **Rejected.** A separate `spectrogram_bytes` column (needs a migration for no practical gain);
   grayscale PNGs (smaller still, but much harder to read).
+
+## 17. 2026-09-15 — Dashboard without third-party JavaScript, compiled into the binary
+
+- **Decision.** Draw the two charts by hand (HTML bars and a small inline SVG) instead of
+  vendoring Chart.js, and embed the four static files in the binary with `include_str!`.
+  API calls use the relative base `api/v1`, and times are formatted in the station time zone.
+- **Why.** The charts are simple enough that a library adds more than it saves; no vendored file
+  means no licence file, no pinned download to refresh, and nothing to fetch at build time. An
+  embedded UI keeps the Docker image to a single executable and cannot drift from the API it was
+  built with. Relative URLs keep the page working behind a reverse-proxy path prefix.
+- **Rejected.** Chart.js (plan default, ~200 KB for two charts); server-side SVG with `plotters`
+  (a new dependency and less interactive); serving `static/` from disk (another thing to mount).

@@ -822,6 +822,18 @@ temp DB seeded with 50 rows):
 
 ### Step 9 — Web UI (charts and playback)
 
+> **STATUS: DONE (2026-09-15).** `static/index.html`, `app.js`, `style.css` and `favicon.svg`,
+> compiled into the binary (`include_str!`) and served at `/` by the API router. Plain JavaScript
+> with no build step and **no third-party code**: the "latest birds" horizontal bar chart is HTML,
+> the "by hour" stacked column chart is inline SVG (top 7 species plus "Other", gridlines, legend,
+> per-segment tooltips). Sections: status strip (`/health`, warns when audio stops or chunks
+> drop), latest birds with 1h/6h/24h/7d/30d buttons, by-hour chart with a date picker, recent
+> detections (live via `EventSource`, flash on arrival, play button, spectrogram thumbnail opening
+> a viewer dialog, clip filled in after it is saved), species table with best-recording playback.
+> Times are shown in the station time zone from `/config`. Light and dark themes, usable at phone
+> width. Tests: dashboard assets served with correct types and gzip; `docs/UI_CHECKLIST.md` for
+> manual checks. Deviation: no vendored Chart.js (DECISIONS #17).
+
 **Objective.** A single static page good enough to replace BirdNET-Pi's
 dashboard for the core feature.
 

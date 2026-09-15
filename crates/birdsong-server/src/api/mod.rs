@@ -1,10 +1,11 @@
-//! HTTP API v1 (`BUILD_PLAN.md` §6, documented in `docs/API.md`).
+//! HTTP API v1 (`BUILD_PLAN.md` §6, documented in `docs/API.md`) and the web dashboard at `/`.
 
 mod detections;
 mod error;
 mod insights;
 mod params;
 mod stream;
+mod ui;
 
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -45,7 +46,7 @@ pub struct AppState {
     pub shutdown: CancellationToken,
 }
 
-/// All routes under `/api/v1`, with compression (not for audio or event streams), CORS and
+/// The dashboard at `/` and all routes under `/api/v1`, with compression (not for audio or event streams), CORS and
 /// request tracing. Unknown paths get a JSON 404.
 pub fn router(state: AppState) -> Router {
     let api = Router::new()
@@ -69,6 +70,11 @@ pub fn router(state: AppState) -> Router {
     let cors = cors_layer(&state.config.server.cors_allow_origins);
 
     Router::new()
+        .route("/", get(ui::index))
+        .route("/index.html", get(ui::index))
+        .route("/app.js", get(ui::app_js))
+        .route("/style.css", get(ui::style_css))
+        .route("/favicon.svg", get(ui::favicon))
         .nest("/api/v1", api)
         .fallback(fallback)
         .layer(compression)
