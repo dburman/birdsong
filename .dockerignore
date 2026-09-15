@@ -1,0 +1,5 @@
+target/
+models/
+data/
+tools/convert_model/.venv/
+.git/

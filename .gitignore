@@ -3,3 +3,6 @@ models/
 data/
 *.sqlite*
 .DS_Store
+tools/convert_model/.venv/
+tools/fixtures/soundscape.wav
+tools/fixtures/golden/soundscape.json

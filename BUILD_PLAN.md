@@ -239,7 +239,7 @@ pub trait DetectionStore: Send + Sync {
 | Audio capture v1 | spawn `ffmpeg` as a child process, read raw PCM from stdout | zero FFI in our tree, handles ALSA devices **and** RTSP identically, trivial in Docker | `cpal` (pure Rust API over ALSA; good v2 option to drop the ffmpeg dependency for USB mics) |
 | WAV I/O | `hound` | pure Rust | — |
 | DSP (spectrogram PNGs, optional mel frontend) | `rustfft` + `image` | pure Rust | — |
-| Inference | **`tract`** (`tract-onnx`, possibly `tract-tflite`) | pure Rust, runs on aarch64, loads ONNX and TFLite | `ort` (ONNX Runtime; faster, but is an FFI wrapper → **[ASK OWNER]** before using, see Step 2 fallback) |
+| Inference | **`tract-onnx`** + Rust mel frontend (decided in Step 0) | pure Rust, runs on aarch64, parity with TFLite speed on the dev machine | `tract-tflite` (unsupported ops), `ort` (FFI wrapper, not needed) |
 | Charts | vendored `Chart.js` (single JS file in `static/`) driven by the JSON API | simplest possible; no build toolchain | server-side SVG via `plotters` (pure Rust, no JS; good v2 if JS is unwanted) |
 | Time zones | `chrono` + `chrono-tz` | daily charts must be in local time | — |
 | Logging | `tracing` + `tracing-subscriber` | structured, works in Docker logs | — |
@@ -288,13 +288,14 @@ species_filter_threshold = 0.03   # BirdNET-Analyzer SF_THRESH default [VERIFY]
 top_n_per_chunk = 3       # how many classes per chunk may become detections
 include_species = []      # scientific names always allowed (bypass location filter)
 exclude_species = []      # scientific names never reported
-privacy_threshold = 0.0   # 0 disables; else mask chunks where a Human_* class is in top N with score >= this
+privacy_filter = true     # BirdNET-Pi human-voice mask (rank based, see §7.6)
+privacy_threshold = 0.0   # percent 0..100; higher = stricter (looks deeper into the ranking)
 
 [model]
 dir = "/models"
-classifier = "BirdNET_GLOBAL_6K_V2.4_Model_FP32.onnx"
-labels = "BirdNET_GLOBAL_6K_V2.4_Labels.txt"
-meta_model = "BirdNET_GLOBAL_6K_V2.4_MData_Model_V2_FP16.onnx"  # optional
+classifier = "birdnet-v2.4-headless.onnx"   # produced by tools/convert_model (docs/MODEL.md)
+labels = "labels/en_us.txt"
+meta_model = "meta-model.onnx"              # optional
 species_list = ""         # optional precomputed list; if set, meta_model is ignored
 threads = 0               # 0 = num_cpus - 1, min 1
 
@@ -413,20 +414,22 @@ Implementers: put these in `birdsong-model/src/postprocess.rs` with unit tests.
    of a *file* are zero-padded if ≥ 1.5 s, else dropped (BirdNET's
    `splitSignal` `minlen=1.5`). For live streams there is no trailing window.
 
-2. **Sigmoid with sensitivity.** BirdNET-Analyzer:
+2. **Sigmoid with sensitivity.** Verified against BirdNET-Pi `scripts/utils/models.py`:
    ```
    s = clamp(1.0 - (sensitivity - 1.0), 0.5, 1.5)   # user sensitivity 1.25 → s = 0.75
-   conf = 1 / (1 + exp(-s * clamp(logit, -15, 15)))
+   conf = 1 / (1 + exp(-s * logit))                  # no clipping in BirdNET-Pi
    ```
-   `[VERIFY]` sign conventions against `birdnet_analyzer/model.py::flat_sigmoid`.
    Higher user sensitivity → flatter sigmoid → more detections above threshold.
+   (BirdNET-Analyzer's `flat_sigmoid` also clips logits to ±20; we follow BirdNET-Pi, see DECISIONS #6.)
 
-3. **Week number (1–48).** Four "weeks" per month:
-   `week = (month - 1) * 4 + min(4, (day - 1) / 7 + 1)` `[VERIFY]` against
-   BirdNET-Pi `helpers.py`.
+3. **Week number (1–48).** Four "weeks" per month, the scheme the meta model was trained on:
+   `week = (month - 1) * 4 + min(4, (day - 1) / 7 + 1)`; `-1` means year-round.
+   Note: BirdNET-Pi's `species.py` feeds the ISO calendar week (1–53) instead, which is
+   slightly wrong for weeks 49–53; we deliberately use the 48-week scheme (DECISIONS #7).
 
-4. **Species filter.** Meta model input is `[lat, lon, week]` (f32×3), output
-   is one probability per class. Allowed = `{i | p[i] >= species_filter_threshold}`
+4. **Species filter.** Meta model input is `[lat, lon, week]` (f32×3, raw values), output
+   is one probability per class (verified: `tests/golden_meta_v24.rs`; e.g. Boston week 20 →
+   126 species at threshold 0.03). Allowed = `{i | p[i] >= species_filter_threshold}`
    ∪ `include_species` − `exclude_species`. If `latitude == 0 && longitude == 0`,
    or no meta model/species list is configured → allow all. Recomputed when
    the week changes (check once an hour).
@@ -435,10 +438,12 @@ Implementers: put these in `birdsong-model/src/postprocess.rs` with unit tests.
    `top_n_per_chunk`; keep those with `conf >= min_confidence`. Each survivor
    becomes one `Detection` with `detected_at = chunk.start_at`.
 
-6. **Privacy mask (optional).** If `privacy_threshold > 0` and any label
-   starting with `Human` has `conf >= privacy_threshold` in the chunk's top
-   10, discard all detections from this chunk **and** do not save a clip for
-   the adjacent chunks. `[VERIFY]` BirdNET-Pi masks neighbours too.
+6. **Privacy mask (optional).** BirdNET-Pi (`filter_humans` in `utils/analysis.py`) is
+   **rank-based**: `cutoff = max(10, int(6000 * privacy_threshold / 100))`; if any class whose
+   label contains `Human` appears within the top `cutoff` ranks of a chunk, that chunk **and both
+   neighbouring chunks** are replaced by no detections (and no clip). `privacy_threshold` is a
+   percentage 0–100; 0 still masks when a Human class is in the top 10. Replicate exactly; make
+   the whole feature switchable with `privacy_filter = true|false` (BirdNET-Pi has it always on).
 
 7. **Clip extraction.** Clip covers
    `[chunk.start − (clip_seconds − 3)/2, chunk.start + 3 + (clip_seconds − 3)/2]`,
@@ -447,10 +452,9 @@ Implementers: put these in `birdsong-model/src/postprocess.rs` with unit tests.
    chunk; each detection row gets the same `clip_path`).
 
 8. **Labels file.** One line per class, `Scientific name_Common name`
-   (e.g. `Cardinalis cardinalis_Northern Cardinal`). Index = line number.
-   Non-bird classes in V2.4 include `Dog_Dog`, `Engine_Engine`,
-   `Human vocal_Human vocal`, `Siren_Siren`, `Noise_Noise`, etc. `[VERIFY]`
-   exact list by reading the file.
+   (e.g. `Cardinalis cardinalis_Northern Cardinal`). Index = line number. Verified: 6 522 lines.
+   Non-bird classes in V2.4 include `Dog_Dog` (1950), `Engine_Engine` (2144),
+   `Human non-vocal`/`Human vocal`/`Human whistle` (2819–2821), `Noise_Noise` (3928), `Siren_Siren` (5561).
 
 ---
 
@@ -459,6 +463,16 @@ Implementers: put these in `birdsong-model/src/postprocess.rs` with unit tests.
 Each step ends with a checklist. Estimated sizes are for orientation only.
 
 ### Step 0 — Feasibility spike: run BirdNET in pure Rust  *(do this first; it decides everything)*
+
+> **STATUS: DONE (2026-09-15).** Outcome: path **(c)** works. BirdNET V2.4 runs in pure Rust as
+> `tract-onnx` (headless CNN) + a Rust mel frontend, reproducing the TFLite reference logits to
+> 0.0017 max abs error with identical top-1 on all 40 chunks, at ~24–27 ms per chunk on an
+> M-series core (Pi numbers still pending hardware). The meta model converts with tf2onnx and runs
+> in tract in ~0.6 ms. Paths (a) and (b) failed; (d) `ort` was not needed. Details and checksums:
+> `docs/MODEL.md`; reasoning: `docs/DECISIONS.md` #2–#6. What exists now:
+> `crates/birdsong-model/src/mel.rs` (frontend + tests), `tests/golden_v24.rs`,
+> `tests/golden_meta_v24.rs`, `examples/load_onnx.rs`, `tools/convert_model/*.py`,
+> `tools/fixtures/`, `docker/spike.Dockerfile`. **Step 2 should productionise these, not rewrite them.**
 
 **Objective.** Prove that `tract` can load and run the BirdNET V2.4 classifier
 on x86_64 **and** on aarch64, with acceptable speed, and that its outputs match
@@ -543,7 +557,8 @@ Jan 1, Jan 7, Jan 8, Jan 29, Feb 1, Dec 31.
 
 ### Step 2 — Model crate (productionise the spike)
 
-**Objective.** Turn the spike into the real `birdsong-model` crate.
+**Objective.** Turn the spike into the real `birdsong-model` crate. The mel frontend
+(`src/mel.rs`) and the two golden tests already exist and pass; keep them, add the pieces below.
 
 **Deliverables.**
 - `Classifier` trait + `TractClassifier` (whichever path Step 0 chose).
@@ -552,7 +567,7 @@ Jan 1, Jan 7, Jan 8, Jan 29, Feb 1, Dec 31.
 - `species_filter.rs`: `SpeciesFilter::from_meta_model(model, lat, lon, week, threshold)` **and**
   `SpeciesFilter::from_list_file(path)`; `SpeciesFilter::allow_all()`.
 - `ModelBundle::load(&Config) -> Result<ModelBundle>` that wires all of the above.
-- Feature flag `mel-rust` if path (c) was chosen, so the Rust mel frontend is isolated.
+- `TractClassifier` = `BirdnetV24Frontend` + headless ONNX; keep `examples/load_onnx.rs` as a debugging aid.
 
 **Tests.**
 - Golden test from Step 0 moved here.
@@ -827,7 +842,7 @@ Xeno-canto CC-BY recordings (record attribution in `tools/fixtures/README.md`).
 
 | Risk | Likelihood | Mitigation |
 |------|-----------|------------|
-| tract cannot run the in-graph STFT | medium | Step 0 path (c): Rust mel frontend + headless model; path (d): ask owner about `ort` |
+| tract cannot run the in-graph STFT | **happened** | Resolved in Step 0 with path (c): Rust mel frontend + headless model |
 | Too slow on Pi 4 | medium | measure in Step 0; options: FP16, fewer threads contention, larger step (overlap 0), energy gate, or recommend Pi 5 |
 | Meta (location) model conversion fails | low-medium | precomputed species-list file via Python at setup time (`species_list = …`) |
 | SD-card wear from clips | medium | WAL, batched writes, retention caps, recommend USB SSD |
@@ -854,7 +869,7 @@ Xeno-canto CC-BY recordings (record attribution in `tools/fixtures/README.md`).
 | Model | Notes for this project |
 |-------|------------------------|
 | **BirdNET V2.4** (default) | ~6.5k classes, 3 s @ 48 kHz, TFLite/Keras, CC BY-NC-SA. Well understood; BirdNET-Pi parity. |
-| BirdNET newer versions | The BirdNET team has been releasing updated models; check the BirdNET-Analyzer releases page and Zenodo for anything newer than V2.4 and whether the input contract (3 s, 48 kHz) changed. `[VERIFY]` |
+| **BirdNET V3.0 (preview, 2026)** | Evaluated in Step 0: 11 560 species, 3 s at **32 kHz**, sigmoid inside the graph (no sensitivity knob), 1 280-dim embeddings, ONNX FP32 is 516 MB. tract cannot run its ONNX `STFT` op, so it would need the same frontend split as V2.4. Pi 5 territory. Details in `docs/MODEL.md`. Also note BirdNET-Pi itself now offers a `BirdNETGo20250916` model option. |
 | BirdNET custom classifiers | BirdNET-Analyzer can train a small head on top of BirdNET embeddings for local species/dialects or new classes. Our `Classifier` trait can expose embeddings to support this later. |
 | **Google Perch** (Perch 2.0, 2025) | Apache-2.0 model, ~10k+ bird species and, in 2.0, additional non-bird taxa (mammals, amphibians, insects) `[VERIFY scope]`. 5 s @ 32 kHz input. Larger than BirdNET; likely heavy for a Pi 4, plausible on a Pi 5. Strong embeddings for few-shot / nearest-neighbour search. Best second backend. |
 | Merlin Sound ID (Cornell) | closed; not usable. |
