@@ -73,3 +73,16 @@ One entry per non-obvious decision. Newest at the bottom. Format: Decision / Why
   are masked too. Add an on/off switch (`privacy_filter`) since BirdNET-Pi cannot disable it.
 - **Why.** Parity with the feature being replicated; the rank-based rule is cheap.
 - **Rejected.** The confidence-threshold variant first drafted in the plan.
+
+## 9. 2026-09-15 — Typed errors inside library crates; one-chunk latency for the privacy rule
+
+- **Decision.** Library crates return their own `thiserror` enums (`ModelError`, later
+  `AudioError`, `StoreError`); `anyhow` is used only in the binary and tests. The §2.3 interface
+  sketch said `anyhow::Result`; the typed form converts into it transparently.
+  BirdNET-Pi's rule that blanks the chunks *adjacent* to a human-voice chunk needs the next chunk,
+  so on live audio `NeighbourMask` holds each analysis back by one chunk (3 s) before releasing it.
+- **Why.** Typed errors let callers distinguish "model missing" from "bad input" without string
+  matching. The latency is the only way to honour the neighbour rule on a stream; 3 s is
+  irrelevant for a bird logger.
+- **Rejected.** `anyhow` everywhere (loses error kinds); applying the neighbour rule only backwards
+  (would leave the chunk *after* a human unmasked, unlike BirdNET-Pi).

@@ -453,8 +453,8 @@ Implementers: put these in `birdsong-model/src/postprocess.rs` with unit tests.
 
 8. **Labels file.** One line per class, `Scientific name_Common name`
    (e.g. `Cardinalis cardinalis_Northern Cardinal`). Index = line number. Verified: 6 522 lines.
-   Non-bird classes in V2.4 include `Dog_Dog` (1950), `Engine_Engine` (2144),
-   `Human non-vocal`/`Human vocal`/`Human whistle` (2819–2821), `Noise_Noise` (3928), `Siren_Siren` (5561).
+   Non-bird classes in V2.4 (0-based index) include `Dog_Dog` (1949), `Engine_Engine` (2143),
+   `Human non-vocal`/`Human vocal`/`Human whistle` (2818–2820), `Noise_Noise` (3927), `Siren_Siren` (5560).
 
 ---
 
@@ -561,6 +561,15 @@ Jan 1, Jan 7, Jan 8, Jan 29, Feb 1, Dec 31.
 ---
 
 ### Step 2 — Model crate (productionise the spike)
+
+> **STATUS: DONE (2026-09-15).** `birdsong-model` now has: `Classifier` trait + `TractClassifier`
+> (frontend + headless ONNX), `MetaModel`, `Labels`, `SpeciesFilter` (meta model / list file /
+> allow-all, with include/exclude), `PostprocessConfig` + `analyze_chunk` (sigmoid with
+> sensitivity, rank-based human check, species filter, top-N, threshold), `NeighbourMask`
+> (BirdNET-Pi's adjacent-chunk privacy rule, one chunk of latency on live audio), `top_scores`
+> for the CLI, and `ModelBundle::load(&Config)`. 16 unit tests + 5 integration tests (golden
+> classifier, golden meta model, bundle end-to-end). Library errors are typed (`ModelError`),
+> see DECISIONS #9.
 
 **Objective.** Turn the spike into the real `birdsong-model` crate. The mel frontend
 (`src/mel.rs`) and the two golden tests already exist and pass; keep them, add the pieces below.

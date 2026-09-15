@@ -1,19 +1,19 @@
-//! Spike golden test: Rust mel frontend + headless BirdNET V2.4 ONNX in tract must reproduce
-//! the TFLite reference logits recorded by tools/convert_model/export_reference.py.
+//! Golden test: [`TractClassifier`] (Rust mel frontend + headless BirdNET V2.4 ONNX in tract)
+//! must reproduce the TFLite reference logits recorded by tools/convert_model/export_reference.py.
 //!
-//! Skips (passes trivially) when the model or fixtures are absent, since `models/` is not committed.
+//! Skips when the model is absent, since `models/` is not committed. `soundscape_15s` (5 chunks)
+//! is committed; the full 2-minute `soundscape` is optional and local.
 #![forbid(unsafe_code)]
 
-use birdsong_model::mel::BirdnetV24Frontend;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::time::Instant;
-use tract_onnx::prelude::*;
+
+use birdsong_model::{Classifier, TractClassifier};
 
 fn repo_root() -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../..")
 }
 
-/// `soundscape_15s` (5 chunks) is committed; the full 2-minute `soundscape` is optional and local.
 #[test]
 fn headless_v24_matches_tflite_golden() -> anyhow::Result<()> {
     let model_path = repo_root().join("models/birdnet-v2.4-headless.onnx");
@@ -21,13 +21,23 @@ fn headless_v24_matches_tflite_golden() -> anyhow::Result<()> {
         eprintln!("skipping: {} not present", model_path.display());
         return Ok(());
     }
+    let t0 = Instant::now();
+    let mut classifier = TractClassifier::load(&model_path)?;
+    eprintln!("model load+optimise: {:?}", t0.elapsed());
+    assert_eq!(classifier.num_classes(), 6522);
+    assert_eq!(classifier.model_id(), "birdnet-v2.4");
+    assert!(
+        classifier.predict(&[0.0; 10]).is_err(),
+        "wrong length must be rejected"
+    );
+
     let mut ran = 0;
     for stem in ["soundscape_15s", "soundscape"] {
         let wav_path = repo_root().join(format!("tools/fixtures/{stem}.wav"));
         let golden_path = repo_root().join(format!("tools/fixtures/golden/{stem}.json"));
         if wav_path.exists() && golden_path.exists() {
             eprintln!("== fixture {stem} ==");
-            check_fixture(&model_path, &wav_path, &golden_path)?;
+            check_fixture(&mut classifier, &wav_path, &golden_path)?;
             ran += 1;
         }
     }
@@ -36,18 +46,10 @@ fn headless_v24_matches_tflite_golden() -> anyhow::Result<()> {
 }
 
 fn check_fixture(
-    model_path: &std::path::Path,
-    wav_path: &std::path::Path,
-    golden_path: &std::path::Path,
+    classifier: &mut dyn Classifier,
+    wav_path: &Path,
+    golden_path: &Path,
 ) -> anyhow::Result<()> {
-    let t0 = Instant::now();
-    let model = tract_onnx::onnx()
-        .model_for_path(model_path)?
-        .with_input_fact(0, f32::fact([1, 96, 511, 2]).into())?
-        .into_optimized()?
-        .into_runnable()?;
-    eprintln!("model load+optimise: {:?}", t0.elapsed());
-
     let mut reader = hound::WavReader::open(wav_path)?;
     assert_eq!(reader.spec().sample_rate, 48_000);
     let samples: Vec<f32> = reader
@@ -55,30 +57,19 @@ fn check_fixture(
         .map(|s| s.map(|v| v as f32 / 32768.0))
         .collect::<Result<_, _>>()?;
     let golden: serde_json::Value = serde_json::from_str(&std::fs::read_to_string(golden_path)?)?;
-    let frontend = BirdnetV24Frontend::new();
 
-    let max_chunks: usize = std::env::var("GOLDEN_MAX_CHUNKS")
-        .ok()
-        .and_then(|v| v.parse().ok())
-        .unwrap_or(usize::MAX);
     let mut worst = 0.0f32;
     let mut top1_mismatches = 0;
     let mut n = 0u32;
-    let mut fe_time = std::time::Duration::ZERO;
-    let mut nn_time = std::time::Duration::ZERO;
-    for chunk in golden["chunks"].as_array().unwrap().iter().take(max_chunks) {
+    let mut total = std::time::Duration::ZERO;
+    for chunk in golden["chunks"].as_array().unwrap() {
         let start = chunk["start_sample"].as_u64().unwrap() as usize;
         let mut audio = samples[start..(start + 144_000).min(samples.len())].to_vec();
         audio.resize(144_000, 0.0);
 
-        let t1 = Instant::now();
-        let spec = frontend.compute(&audio);
-        fe_time += t1.elapsed();
-        let input = Tensor::from_shape(&[1, 96, 511, 2], &spec)?;
-        let t2 = Instant::now();
-        let out = model.run(tvec!(input.into()))?;
-        nn_time += t2.elapsed();
-        let logits = out[0].try_as_plain()?.as_slice::<f32>()?.to_vec();
+        let t = Instant::now();
+        let logits = classifier.predict(&audio)?;
+        total += t.elapsed();
 
         let reference: Vec<f32> = chunk["logits"]
             .as_array()
@@ -112,11 +103,7 @@ fn check_fixture(
         );
     }
     eprintln!("{n} chunks: worst max|dlogit|={worst:.4}, top1 mismatches={top1_mismatches}");
-    eprintln!(
-        "mean frontend {:?}/chunk, mean network {:?}/chunk",
-        fe_time / n,
-        nn_time / n
-    );
+    eprintln!("mean predict (frontend + network) {:?}/chunk", total / n);
     assert!(worst < 5e-2, "logit mismatch too large: {worst}");
     assert_eq!(top1_mismatches, 0, "top-1 class differs from reference");
     Ok(())

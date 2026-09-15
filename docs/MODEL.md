@@ -9,7 +9,7 @@
 | Input | 3.0 s of mono audio at 48 000 Hz = 144 000 float32 samples (any scale; the frontend normalises) |
 | Output | 6 522 logits (one per class); sigmoid applied afterwards |
 | Labels | `labels/en_us.txt` (and 20+ other languages), one `Scientific name_Common name` per line, index = line number |
-| Non-bird classes | `Dog_Dog` (1950), `Engine_Engine` (2144), `Human non-vocal` (2819), `Human vocal` (2820), `Human whistle` (2821), `Noise_Noise` (3928), `Siren_Siren` (5561), plus a few more |
+| Non-bird classes (0-based index) | `Dog_Dog` (1949), `Engine_Engine` (2143), `Human non-vocal` (2818), `Human vocal` (2819), `Human whistle` (2820), `Noise_Noise` (3927), `Siren_Siren` (5560), plus a few more |
 
 ### Files (all under `models/`, git-ignored)
 

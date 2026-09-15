@@ -125,10 +125,13 @@ name = "birdsong-model"
 version = "0.1.0"
 dependencies = [
  "anyhow",
+ "birdsong-core",
+ "chrono",
  "hound",
  "rustfft",
- "serde",
  "serde_json",
+ "thiserror",
+ "tracing",
  "tract-onnx",
 ]
 
