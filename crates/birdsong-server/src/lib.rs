@@ -1,6 +1,8 @@
 #![forbid(unsafe_code)]
-//! The Birdsong application: the detection pipeline, and later the HTTP API and web UI.
+//! The Birdsong application: the detection pipeline, offline analysis tools, and later the
+//! HTTP API and web UI.
 
+pub mod analyze;
 pub mod pipeline;
 mod queue;
 pub mod stats;

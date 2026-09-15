@@ -148,3 +148,14 @@ One entry per non-obvious decision. Newest at the bottom. Format: Decision / Why
   masked. Drops only happen when inference is badly overloaded; Step 11 revisits it.
 - **Rejected.** A tokio `mpsc` channel (cannot drop oldest); one inference thread per source
   (doubles model memory, no gain on a 4-core Pi running a single-threaded model).
+
+## 13. 2026-09-15 — Offline tools share the pipeline's code and need no config
+
+- **Decision.** `analyze` reuses `Chunker`, `analyze_chunk` and `NeighbourMask` rather than a
+  simplified loop, and reports both the raw ranking (ignoring filters) and what `run` would store.
+  Both tools run without a config file (model directory `./models`, no location unless
+  `--lat/--lon`), and `species-list` exits non-zero when no filter is active instead of printing
+  all 6 522 classes. The recording date (`--date`, default today) picks the location-filter week.
+- **Why.** The tool exists to answer "why didn't `run` detect X"; a different code path would give
+  different answers. Config-free use makes it handy on a laptop with a downloaded recording.
+- **Rejected.** Reading the date from WAV metadata or file names (unreliable across recorders).

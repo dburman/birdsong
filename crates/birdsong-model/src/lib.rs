@@ -16,7 +16,7 @@ mod meta;
 mod postprocess;
 mod species_filter;
 
-pub use bundle::ModelBundle;
+pub use bundle::{ModelBundle, SpeciesFilterKind};
 pub use classifier::{Classifier, TractClassifier, BIRDNET_V24_MODEL_ID};
 pub use error::ModelError;
 pub use labels::{Label, Labels};

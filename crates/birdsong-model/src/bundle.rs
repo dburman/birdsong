@@ -4,6 +4,27 @@ use crate::{
     Classifier, Labels, MetaModel, ModelError, PostprocessConfig, SpeciesFilter, TractClassifier,
 };
 
+/// Where a bundle's species filter comes from.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum SpeciesFilterKind {
+    /// Every species allowed (no location, or no meta model / species list configured).
+    None,
+    /// BirdNET's location/week model.
+    LocationModel,
+    /// A static species list file.
+    SpeciesList,
+}
+
+impl SpeciesFilterKind {
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            Self::None => "none",
+            Self::LocationModel => "location-model",
+            Self::SpeciesList => "species-list",
+        }
+    }
+}
+
 /// Everything the pipeline needs to turn audio into detections, loaded from [`Config`].
 pub struct ModelBundle {
     pub classifier: Box<dyn Classifier>,
@@ -91,6 +112,28 @@ impl ModelBundle {
 
     /// `true` when detections are restricted by location or a species list.
     pub fn has_species_filter(&self) -> bool {
-        self.static_list.is_some() || self.meta_model.is_some()
+        self.species_filter_kind() != SpeciesFilterKind::None
+    }
+
+    pub fn species_filter_kind(&self) -> SpeciesFilterKind {
+        match (&self.static_list, &self.meta_model, self.location) {
+            (Some(_), _, _) => SpeciesFilterKind::SpeciesList,
+            (None, Some(_), Some(_)) => SpeciesFilterKind::LocationModel,
+            _ => SpeciesFilterKind::None,
+        }
+    }
+
+    /// Threshold applied to location-model scores.
+    pub fn species_filter_threshold(&self) -> f32 {
+        self.species_filter_threshold
+    }
+
+    /// Raw location-model occurrence scores per class for a week, when the location model is the
+    /// active filter; `None` otherwise.
+    pub fn location_scores_for_week(&self, week: i32) -> Result<Option<Vec<f32>>, ModelError> {
+        match (&self.static_list, &self.meta_model, self.location) {
+            (None, Some(meta), Some((lat, lon))) => meta.predict(lat, lon, week).map(Some),
+            _ => Ok(None),
+        }
     }
 }

@@ -714,6 +714,18 @@ Jan 1, Jan 7, Jan 8, Jan 29, Feb 1, Dec 31.
 
 ### Step 6 — `analyze` CLI (offline tool and debugging aid)
 
+> **STATUS: DONE (2026-09-15).** `birdsong analyze <file> [--config|--models] [--lat --lon]
+> [--date YYYY-MM-DD] [--top N] [--no-filter] [--json]` runs the pipeline's own code path
+> (chunker incl. padded tail, classifier, `analyze_chunk`, `NeighbourMask`) and prints per chunk
+> the top N classes with logit, confidence and whether the species filter allows them, what
+> `run` would report, and privacy masking; plus a species summary. 48 kHz WAV is read directly,
+> other formats are decoded with ffmpeg. `birdsong species-list [--week N | --date D] [--json]`
+> prints allowed species sorted by location score, and fails clearly when no filter is configured.
+> Both work without a config file (models from `./models`). `ModelBundle` gained
+> `species_filter_kind`, `species_filter_threshold` and `location_scores_for_week`.
+> Tests: 2 unit, 4 CLI (golden logits via `--json`, text with location, week-20 count 126 and
+> year-round 236 matching the meta golden, error cases). See DECISIONS #13.
+
 **Objective.** `birdsong analyze <file.wav> [--json]` prints per-chunk top-5
 with confidences, using the same code path as `run`. This is how humans and
 models debug "why didn't it detect X". Also `birdsong species-list` prints
