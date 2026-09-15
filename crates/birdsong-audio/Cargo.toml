@@ -1,5 +1,6 @@
 [package]
 name = "birdsong-audio"
+description = "Audio capture (ffmpeg, WAV files), time-indexed ring buffer, 3 s chunker and WAV I/O"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
@@ -8,3 +9,13 @@ repository.workspace = true
 
 [dependencies]
 birdsong-core.workspace = true
+thiserror.workspace = true
+chrono.workspace = true
+hound.workspace = true
+tokio.workspace = true
+tokio-util.workspace = true
+async-trait.workspace = true
+tracing.workspace = true
+
+[dev-dependencies]
+tempfile.workspace = true

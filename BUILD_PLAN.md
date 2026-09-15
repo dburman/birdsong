@@ -594,6 +594,17 @@ Jan 1, Jan 7, Jan 8, Jan 29, Feb 1, Dec 31.
 
 ### Step 3 — Audio crate: sources, ring buffer, chunker
 
+> **STATUS: DONE (2026-09-15).** `birdsong-audio` has: `AudioSource` trait; `FfmpegSource` for
+> alsa/rtsp/file (restart with 1→30 s backoff for live inputs, fatal if ffmpeg is missing,
+> credentials redacted from logs, sample-count timestamps re-anchored on >2 s drift);
+> pure-Rust `WavFileSource` (fast or realtime pacing); `RingBuffer` (time-indexed, shared via
+> `Arc<Mutex<_>>` as `SharedRingBuffer`); `Chunker` (overlap, gap detection with 1 s tolerance,
+> `finish()` for ≥1.5 s zero-padded tails); `wav::{read_wav, read_wav_48k_mono, write_wav}`;
+> `source_from_config`. Config gained `audio.ffmpeg_path` and `audio.ring_buffer_seconds`
+> (default 90, minimum 30 and 2×clip length). 19 unit + 9 integration tests; ffmpeg tests skip
+> when ffmpeg is absent and CI installs it. ALSA capture is **untested** until run on Linux
+> hardware (Homebrew ffmpeg has no ALSA). See DECISIONS #10.
+
 **Objective.** Continuous 48 kHz mono f32 audio from ffmpeg, cut into
 3-second chunks, with a ring buffer for clip extraction.
 

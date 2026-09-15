@@ -86,3 +86,22 @@ One entry per non-obvious decision. Newest at the bottom. Format: Decision / Why
   irrelevant for a bird logger.
 - **Rejected.** `anyhow` everywhere (loses error kinds); applying the neighbour rule only backwards
   (would leave the chunk *after* a human unmasked, unlike BirdNET-Pi).
+
+## 10. 2026-09-15 — Audio timing, capture path and buffer sharing
+
+- **Decision.**
+  - Frames are timestamped by **sample count** from an anchor, not by read time. Live sources
+    anchor to the wall clock when the first frame arrives and re-anchor only when drift exceeds
+    2 s (a stalled stream or restart). The chunker treats a >1 s mismatch as a gap: it resets
+    alignment and the ring buffer and emits `ChunkerEvent::Gap` so the pipeline can flush the
+    privacy `NeighbourMask`.
+  - All configured inputs (alsa, rtsp, file) go through one `FfmpegSource`. A separate pure-Rust
+    `WavFileSource` exists for tests and offline analysis so neither needs ffmpeg.
+  - The ring buffer is shared between the chunker and the clip writer as `Arc<Mutex<RingBuffer>>`.
+  - Requires ffmpeg >= 5.0 (`-timeout` for RTSP; Debian bookworm ships 5.1).
+- **Why.** Read-time stamps jitter with pipe buffering and scheduling, which would misalign chunks
+  and clips; sample counts are exact and gaps become explicit. One ffmpeg path keeps capture code
+  small and handles resampling and every container format. The mutex is held only for memory
+  copies (a 3 s chunk is 576 KB), so contention is negligible.
+- **Rejected.** `cpal` for ALSA (kept as a later option, BUILD_PLAN Step 12); a channel-based
+  request/response protocol to the chunker task for clip extraction (more code, same result).

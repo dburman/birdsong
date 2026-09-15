@@ -56,10 +56,24 @@ impl StationConfig {
     }
 }
 
-#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields, default)]
 pub struct AudioConfig {
+    /// ffmpeg executable used for capture (name on `PATH` or absolute path).
+    pub ffmpeg_path: PathBuf,
+    /// Seconds of recent audio kept per source for clip extraction.
+    pub ring_buffer_seconds: f32,
     pub sources: Vec<AudioSourceConfig>,
+}
+
+impl Default for AudioConfig {
+    fn default() -> Self {
+        Self {
+            ffmpeg_path: PathBuf::from("ffmpeg"),
+            ring_buffer_seconds: 90.0,
+            sources: Vec::new(),
+        }
+    }
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -310,6 +324,14 @@ impl Config {
             ));
         }
 
+        let min_ring = (2.0 * self.storage.clip_seconds).max(30.0);
+        if self.audio.ring_buffer_seconds < min_ring {
+            errors.push(format!(
+                "audio.ring_buffer_seconds {} must be >= {min_ring} (30 s, and twice storage.clip_seconds, \
+                 so clips can still be cut after inference and privacy-filter latency)",
+                self.audio.ring_buffer_seconds
+            ));
+        }
         if self.audio.sources.is_empty() {
             errors.push("audio.sources must contain at least one source".into());
         }
@@ -481,6 +503,7 @@ device = "hw:1,0"
         assert!(bad("[storage]\nclip_seconds = 2.0").contains("clip_seconds"));
         assert!(bad("[server]\nbind = \"nope\"").contains("server.bind"));
         assert!(bad("[detection]\nunknown_key = 1").contains("unknown"));
+        assert!(bad("[audio]\nring_buffer_seconds = 10.0").contains("ring_buffer_seconds"));
         assert!(bad("[[audio.sources]]\nid = \"mic0\"\nkind = \"rtsp\"").contains("duplicate"));
         assert!(bad("[[audio.sources]]\nid = \"cam\"\nkind = \"rtsp\"").contains("needs `url`"));
     }

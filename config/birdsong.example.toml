@@ -7,6 +7,10 @@ latitude = 42.36            # set both to 0 to disable the location filter
 longitude = -71.06
 timezone = "America/New_York"   # IANA name; used for daily charts and clip folder dates
 
+[audio]
+ffmpeg_path = "ffmpeg"          # capture uses ffmpeg (>= 5.0) for ALSA devices, streams and files
+ring_buffer_seconds = 90.0      # recent audio kept per source for cutting clips
+
 # One or more audio sources; each becomes an independent capture task.
 [[audio.sources]]
 id = "mic0"

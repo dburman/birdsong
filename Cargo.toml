@@ -35,6 +35,14 @@ clap = { version = "4", features = ["derive"] }
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 
+# async
+tokio = { version = "1", features = ["rt-multi-thread", "macros", "process", "io-util", "sync", "time"] }
+tokio-util = "0.7"
+async-trait = "0.1"
+
+# testing
+tempfile = "3"
+
 # audio / dsp / inference
 hound = "3.5"
 rustfft = "6"
