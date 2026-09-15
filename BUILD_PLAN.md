@@ -643,6 +643,16 @@ Jan 1, Jan 7, Jan 8, Jan 29, Feb 1, Dec 31.
 
 ### Step 4 — Store crate: SQLite + migrations
 
+> **STATUS: DONE (2026-09-15).** `birdsong-store` has `SqliteStore` (sqlx 0.9, bundled SQLite, WAL,
+> one writer connection + 4 read-only), migration `0001_init.sql` (§5.1 schema, `AUTOINCREMENT`
+> ids), the `DetectionStore` trait (`insert`, `insert_many`, `set_clip`, `get`, `list`,
+> `stats_daily`, `species_summary`), `DetectionQuery` (`after_id`, `before_id`, `since`, `until`,
+> `species`, `min_confidence`, `limit` ≤ 1000, `order`), `DetectionRecord`, `DailyStats`,
+> `SpeciesSummary` (with best clip id), and retention: `stored_clips`, `exempt_clip_paths`,
+> `clips_to_purge` (pure `plan_purge`), `total_clip_bytes`, `clear_clip`,
+> `delete_detections_before`. 5 unit + 7 integration tests (incl. concurrent cursor paging and
+> DST). Interface differences from §2.3 are listed in DECISIONS #11.
+
 **Objective.** Persist and query detections.
 
 **Deliverables.**

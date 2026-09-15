@@ -1,5 +1,6 @@
 [package]
 name = "birdsong-store"
+description = "SQLite persistence for detections: queries, chart statistics and clip retention planning"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
@@ -8,3 +9,14 @@ repository.workspace = true
 
 [dependencies]
 birdsong-core.workspace = true
+thiserror.workspace = true
+chrono.workspace = true
+chrono-tz.workspace = true
+serde.workspace = true
+sqlx.workspace = true
+tokio.workspace = true
+async-trait.workspace = true
+tracing.workspace = true
+
+[dev-dependencies]
+tempfile.workspace = true

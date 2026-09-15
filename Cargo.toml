@@ -12,7 +12,7 @@ members = [
 version = "0.1.0"
 edition = "2021"
 license = "MIT"
-rust-version = "1.85"
+rust-version = "1.94"  # sqlx 0.9
 repository = "https://github.com/dburman/birdsong"
 
 [workspace.dependencies]
@@ -39,6 +39,9 @@ tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 tokio = { version = "1", features = ["rt-multi-thread", "macros", "process", "io-util", "sync", "time"] }
 tokio-util = "0.7"
 async-trait = "0.1"
+
+# storage
+sqlx = { version = "0.9", default-features = false, features = ["runtime-tokio", "sqlite", "sqlite-bundled", "migrate", "macros"] }
 
 # testing
 tempfile = "3"

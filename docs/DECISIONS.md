@@ -105,3 +105,26 @@ One entry per non-obvious decision. Newest at the bottom. Format: Decision / Why
   copies (a 3 s chunk is 576 KB), so contention is negligible.
 - **Rejected.** `cpal` for ALSA (kept as a later option, BUILD_PLAN Step 12); a channel-based
   request/response protocol to the chunker task for clip extraction (more code, same result).
+
+## 11. 2026-09-15 — Store interface and storage details
+
+- **Decision.**
+  - Reads return `DetectionRecord` (all stored columns: local date/hour, week, clip bytes,
+    spectrogram path) rather than the core `Detection`; `to_detection()` converts.
+  - `set_clip(ids, Option<&ClipInfo>)` takes several ids, because one clip covers every detection
+    in its 3 s window. Clip size totals and purge plans count each clip file once.
+  - The time zone is fixed when the store opens; `local_date` and `local_hour` are computed at
+    insert, so `stats_daily(date)` needs no time zone argument and DST is handled once.
+  - Ids use `AUTOINCREMENT` and one writer connection: assigned in commit order and never reused
+    after deletes, so `after_id` cursors cannot skip or repeat rows.
+  - Timestamps are RFC 3339 UTC text with exactly six fractional digits (sortable as text;
+    sub-microsecond precision dropped).
+  - Retention planning is a pure function (`plan_purge`) fed by two queries; the exemption query
+    uses a window function (bundled SQLite supports them).
+  - SQLite is bundled through sqlx (C code behind FFI inside sqlx, allowed by #1). sqlx 0.9 needs
+    Rust 1.94, so the workspace MSRV moved from 1.85 to 1.94.
+- **Why.** Each point removes a class of bug for API consumers (cursors), charts (DST), or the
+  janitor (double-counted shared clips).
+- **Rejected.** `rusqlite` with `spawn_blocking` (works, but more glue); integer epoch timestamps
+  (less readable in database tools, no real gain at this scale); compile-time checked `query!`
+  macros (need a live database or offline metadata in CI).

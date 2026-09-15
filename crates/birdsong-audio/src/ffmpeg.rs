@@ -256,10 +256,8 @@ impl FfmpegSource {
         tx: &mpsc::Sender<AudioFrame>,
         cancel: &CancellationToken,
     ) -> Sent {
-        let mut samples: Vec<f32> = bytes
-            .chunks_exact(4)
-            .map(|b| f32::from_le_bytes([b[0], b[1], b[2], b[3]]))
-            .collect();
+        let (whole, _) = bytes.as_chunks::<4>();
+        let mut samples: Vec<f32> = whole.iter().map(|b| f32::from_le_bytes(*b)).collect();
         apply_gain(&mut samples, self.gain);
         let captured_at = clock.stamp(samples.len(), Utc::now());
         if clock.reanchors == 1 && clock.anchor.is_some() {
