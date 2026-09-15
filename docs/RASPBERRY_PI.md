@@ -96,6 +96,8 @@ docker compose run --rm birdsong check-config --config /config/birdsong.toml
 
 The rolling window for saved audio is under `[retention]`: `clip_max_age_days` (default 14) and
 `clip_max_total_mb` (default 4096). Detection history is kept after clips are deleted.
+Clips are saved as FLAC by default (`storage.clip_format`), about a third the size of WAV with
+identical audio; the size cap counts each clip's audio and spectrogram together.
 
 ## 5. Start
 

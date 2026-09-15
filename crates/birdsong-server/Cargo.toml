@@ -38,5 +38,6 @@ futures-util.workspace = true
 
 [dev-dependencies]
 tempfile.workspace = true
+claxon.workspace = true
 http-body-util.workspace = true
 png.workspace = true

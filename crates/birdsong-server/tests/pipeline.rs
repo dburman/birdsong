@@ -131,12 +131,14 @@ async fn fixture_detections_are_stored_and_broadcast() {
         .expect("clip saved for the chickadee detection");
     assert_eq!(
         clip,
-        "2026-05-15/Black_capped_Chickadee/2026-05-15T10-00-00.000Z_file0_0.75.wav"
+        "2026-05-15/Black_capped_Chickadee/2026-05-15T10-00-00.000Z_file0_0.75.flac"
     );
     let clips_dir = dir.path().join("clips");
-    let audio = birdsong_audio::wav::read_wav(&clips_dir.join(&clip)).unwrap();
+    let mut reader = claxon::FlacReader::open(clips_dir.join(&clip)).expect("clip is FLAC");
+    assert_eq!(reader.streaminfo().sample_rate, 48_000);
+    let decoded: Vec<i32> = reader.samples().collect::<Result<_, _>>().unwrap();
     assert_eq!(
-        audio.samples.len(),
+        decoded.len(),
         216_000,
         "6 s window clamped at the start of the recording"
     );

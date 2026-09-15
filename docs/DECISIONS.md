@@ -272,3 +272,16 @@ One entry per non-obvious decision. Newest at the bottom. Format: Decision / Why
   rule. Checking the policy in CI means a future contributor cannot add an FFI crate by accident.
 - **Rejected.** `metrics` + `metrics-exporter-prometheus` (its default features pull in an HTTP
   server and push-gateway client); ignoring dropped chunks for privacy (the #12 limitation).
+
+## 20. 2026-09-15 — FLAC clips by default
+
+- **Decision.** `storage.clip_format` accepts `flac` (new default) and `wav`. FLAC is encoded in
+  pure Rust with `flacenc` (default features off: no thread pool, no serde), 16-bit mono, scaled
+  exactly like the WAV writer so the two formats hold identical samples. Tests decode with `claxon`.
+  A final frame shorter than 16 samples is padded with silence (at most 0.3 ms), because some
+  decoders reject shorter frames even though the format allows them at the end of a stream.
+- **Why.** Lossless at well under half the size (a 6 s fixture clip: 163 KB FLAC vs 576 KB WAV),
+  which multiplies how much audio fits under `clip_max_total_mb` on an SD card, and BirdWeather
+  accepts only FLAC soundscapes, so the same encoder serves both. Current browsers play FLAC.
+- **Rejected.** Opus or MP3 (lossy, and BirdNET-Pi keeps full-quality audio); calling ffmpeg to
+  encode (a process per clip, and ffmpeg is otherwise only needed for capture).

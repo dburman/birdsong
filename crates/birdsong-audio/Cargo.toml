@@ -15,6 +15,7 @@ chrono.workspace = true
 hound.workspace = true
 rustfft.workspace = true
 png.workspace = true
+flacenc.workspace = true
 tokio.workspace = true
 tokio-util.workspace = true
 async-trait.workspace = true
@@ -22,3 +23,4 @@ tracing.workspace = true
 
 [dev-dependencies]
 tempfile.workspace = true
+claxon.workspace = true

@@ -58,8 +58,8 @@ Returned by the detection endpoints and as the `data` of stream events.
   "confidence": 0.752,
   "source_id": "mic0",
   "model_id": "birdnet-v2.4",
-  "clip_path": "2026-05-15/Black_capped_Chickadee/2026-05-15T10-00-00.000Z_mic0_0.75.wav",
-  "clip_bytes": 612044,
+  "clip_path": "2026-05-15/Black_capped_Chickadee/2026-05-15T10-00-00.000Z_mic0_0.75.flac",
+  "clip_bytes": 413702,
   "spectrogram_path": "2026-05-15/Black_capped_Chickadee/2026-05-15T10-00-00.000Z_mic0_0.75.png"
 }
 ```
@@ -150,11 +150,11 @@ curl -s "$PI/api/v1/detections/1234"
 
 ### `GET /api/v1/detections/{id}/audio`
 
-The saved clip as `audio/wav` (mono, 48 kHz, 16-bit, 6 s by default). Supports `Range` requests so
+The saved clip as `audio/flac` (default) or `audio/wav`, following `storage.clip_format`: mono, 48 kHz, 16-bit, 6 s by default. Supports `Range` requests so
 `<audio>` elements can seek. `404` when the clip was never saved or has been purged.
 
 ```bash
-curl -s -o clip.wav "$PI/api/v1/detections/1234/audio"
+curl -s -o clip.flac "$PI/api/v1/detections/1234/audio"
 curl -s -H "Range: bytes=0-99" -o head.bin "$PI/api/v1/detections/1234/audio"
 ```
 

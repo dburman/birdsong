@@ -1,6 +1,6 @@
-//! Saving detection clips: cut from the source's ring buffer, written as WAV (plus an optional
-//! spectrogram PNG) under `<data_dir>/clips/<local date>/<Species>/`, and attached to every
-//! detection of the window.
+//! Saving detection clips: cut from the source's ring buffer, written as FLAC or WAV (plus an
+//! optional spectrogram PNG) under `<data_dir>/clips/<local date>/<Species>/`, and attached to
+//! every detection of the window.
 
 use std::collections::{HashMap, HashSet, VecDeque};
 use std::path::PathBuf;
@@ -9,8 +9,9 @@ use std::time::{Duration, Instant};
 
 use anyhow::Context;
 use birdsong_audio::{
-    lock_ring, samples_to_delta, spectrogram, wav, SharedRingBuffer, SpectrogramOptions,
+    flac, lock_ring, samples_to_delta, spectrogram, wav, SharedRingBuffer, SpectrogramOptions,
 };
+use birdsong_core::config::ClipFormat;
 use birdsong_core::{local_date_and_hour, sanitize_name, Config, CHUNK_SECONDS, SAMPLE_RATE_HZ};
 use birdsong_store::{ClipInfo, DetectionStore};
 use chrono::{DateTime, TimeDelta, Utc};
@@ -24,6 +25,7 @@ use crate::stats::PipelineStats;
 pub struct ClipSettings {
     pub clips_dir: PathBuf,
     pub clip_seconds: f32,
+    pub format: ClipFormat,
     pub spectrograms: bool,
     pub timezone: Tz,
 }
@@ -33,6 +35,7 @@ impl ClipSettings {
         Self {
             clips_dir: cfg.storage.clips_dir(),
             clip_seconds: cfg.storage.clip_seconds,
+            format: cfg.storage.clip_format,
             spectrograms: cfg.storage.spectrograms,
             timezone: cfg.station.timezone,
         }
@@ -50,14 +53,15 @@ pub fn clip_window(chunk_start: DateTime<Utc>, clip_seconds: f32) -> (DateTime<U
     )
 }
 
-/// `YYYY-MM-DD/Common_Name/YYYY-MM-DDTHH-MM-SS.mmmZ_source_0.87.wav` (date in the station time zone,
-/// time in UTC, confidence of the best detection).
+/// `YYYY-MM-DD/Common_Name/YYYY-MM-DDTHH-MM-SS.mmmZ_source_0.87.<ext>` (date in the station time
+/// zone, time in UTC, confidence of the best detection).
 pub fn clip_relative_path(
     chunk_start: DateTime<Utc>,
     source_id: &str,
     common_name: &str,
     confidence: f32,
     tz: Tz,
+    format: ClipFormat,
 ) -> String {
     let (date, _) = local_date_and_hour(chunk_start, tz);
     let or = |s: String, fallback: &str| {
@@ -68,37 +72,45 @@ pub fn clip_relative_path(
         }
     };
     format!(
-        "{}/{}/{}_{}_{:.2}.wav",
+        "{}/{}/{}_{}_{:.2}.{}",
         date.format("%Y-%m-%d"),
         or(sanitize_name(common_name), "Unknown"),
         chunk_start.format("%Y-%m-%dT%H-%M-%S%.3fZ"),
         or(sanitize_name(source_id), "source"),
-        confidence
+        confidence,
+        format.extension()
     )
 }
 
-/// Write the WAV (and spectrogram) atomically: `.tmp` then rename. A failed spectrogram is logged
+/// Write the clip (and spectrogram) atomically: `.tmp` then rename. A failed spectrogram is logged
 /// and skipped; it never costs the clip. `clip_bytes` is the size of both files together.
 pub fn write_clip_files(
     settings: &ClipSettings,
     relative: &str,
     samples: &[f32],
 ) -> anyhow::Result<ClipInfo> {
+    let extension = settings.format.extension();
     let path = settings.clips_dir.join(relative);
     if let Some(parent) = path.parent() {
         std::fs::create_dir_all(parent)
             .with_context(|| format!("creating {}", parent.display()))?;
     }
-    let tmp = path.with_extension("wav.tmp");
-    wav::write_wav(&tmp, samples, SAMPLE_RATE_HZ)?;
+    let tmp = path.with_extension(format!("{extension}.tmp"));
+    match settings.format {
+        ClipFormat::Flac => flac::write_flac(&tmp, samples, SAMPLE_RATE_HZ)?,
+        ClipFormat::Wav => wav::write_wav(&tmp, samples, SAMPLE_RATE_HZ)?,
+    };
     std::fs::rename(&tmp, &path).with_context(|| format!("renaming {}", tmp.display()))?;
-    let wav_bytes = std::fs::metadata(&path)
+    let audio_bytes = std::fs::metadata(&path)
         .with_context(|| format!("reading {}", path.display()))?
         .len();
 
     let mut png_bytes = 0;
     let spectrogram_path = if settings.spectrograms {
-        let relative_png = format!("{}.png", relative.strip_suffix(".wav").unwrap_or(relative));
+        let stem = relative
+            .strip_suffix(&format!(".{extension}"))
+            .unwrap_or(relative);
+        let relative_png = format!("{stem}.png");
         let png = settings.clips_dir.join(&relative_png);
         let tmp = png.with_extension("png.tmp");
         let written = spectrogram::write_png(
@@ -126,7 +138,7 @@ pub fn write_clip_files(
     Ok(ClipInfo {
         clip_path: relative.to_string(),
         // Disk used by the clip: audio plus spectrogram. This is what the retention size cap counts.
-        clip_bytes: wav_bytes + png_bytes,
+        clip_bytes: audio_bytes + png_bytes,
         spectrogram_path,
     })
 }
@@ -225,6 +237,7 @@ pub(crate) async fn clip_task(
             &job.common_name,
             job.confidence,
             settings.timezone,
+            settings.format,
         );
         let write_settings = settings.clone();
         let written = tokio::task::spawn_blocking(move || {
@@ -264,6 +277,16 @@ mod tests {
         Utc.with_ymd_and_hms(2026, 5, 15, 10, 0, 0).unwrap() + TimeDelta::seconds(secs)
     }
 
+    fn settings(dir: &std::path::Path, format: ClipFormat) -> ClipSettings {
+        ClipSettings {
+            clips_dir: dir.join("clips"),
+            clip_seconds: 6.0,
+            format,
+            spectrograms: true,
+            timezone: chrono_tz::UTC,
+        }
+    }
+
     #[test]
     fn window_is_centred() {
         assert_eq!(
@@ -284,23 +307,32 @@ mod tests {
 
     #[test]
     fn relative_path_layout() {
+        let ny = chrono_tz::America::New_York;
         let p = clip_relative_path(
             t(0),
             "mic0",
             "Black-capped Chickadee",
             0.752,
-            chrono_tz::America::New_York,
+            ny,
+            ClipFormat::Flac,
         );
         assert_eq!(
             p,
-            "2026-05-15/Black_capped_Chickadee/2026-05-15T10-00-00.000Z_mic0_0.75.wav"
+            "2026-05-15/Black_capped_Chickadee/2026-05-15T10-00-00.000Z_mic0_0.75.flac"
         );
+        let p = clip_relative_path(
+            t(0),
+            "mic0",
+            "Black-capped Chickadee",
+            0.752,
+            ny,
+            ClipFormat::Wav,
+        );
+        assert!(p.ends_with("_mic0_0.75.wav"));
         // 02:00 UTC is still the previous day in New York.
         let late = Utc.with_ymd_and_hms(2026, 5, 16, 2, 0, 0).unwrap();
-        assert!(
-            clip_relative_path(late, "", "", 0.9, chrono_tz::America::New_York)
-                .starts_with("2026-05-15/Unknown/")
-        );
+        assert!(clip_relative_path(late, "", "", 0.9, ny, ClipFormat::Flac)
+            .starts_with("2026-05-15/Unknown/"));
     }
 
     #[test]
@@ -329,40 +361,51 @@ mod tests {
         );
     }
 
+    fn no_tmp_files(dir: &std::path::Path) -> bool {
+        std::fs::read_dir(dir)
+            .unwrap()
+            .filter_map(|e| e.ok())
+            .all(|e| !e.path().to_string_lossy().ends_with(".tmp"))
+    }
+
     #[test]
-    fn files_are_written_atomically_with_spectrogram() {
+    fn wav_files_are_written_atomically_with_spectrogram() {
         let dir = tempfile::tempdir().unwrap();
-        let settings = ClipSettings {
-            clips_dir: dir.path().join("clips"),
-            clip_seconds: 6.0,
-            spectrograms: true,
-            timezone: chrono_tz::UTC,
-        };
+        let s = settings(dir.path(), ClipFormat::Wav);
         let rel = "2026-05-15/Wren/2026-05-15T10-00-00.000Z_mic0_0.80.wav";
-        let info = write_clip_files(&settings, rel, &vec![0.1; 48_000]).unwrap();
+        let info = write_clip_files(&s, rel, &vec![0.1; 48_000]).unwrap();
         assert_eq!(info.clip_path, rel);
         let png = info.spectrogram_path.as_deref().unwrap();
-        let on_disk = |rel: &str| {
-            std::fs::metadata(settings.clips_dir.join(rel))
-                .unwrap()
-                .len()
-        };
+        assert_eq!(
+            png,
+            "2026-05-15/Wren/2026-05-15T10-00-00.000Z_mic0_0.80.png"
+        );
+        let on_disk = |rel: &str| std::fs::metadata(s.clips_dir.join(rel)).unwrap().len();
         assert_eq!(on_disk(rel), 44 + 2 * 48_000);
         assert_eq!(
             info.clip_bytes,
             on_disk(rel) + on_disk(png),
             "audio plus spectrogram"
         );
+        assert!(no_tmp_files(&s.clips_dir.join("2026-05-15/Wren")));
+    }
+
+    #[test]
+    fn flac_files_are_written_and_decode_to_the_same_audio() {
+        let dir = tempfile::tempdir().unwrap();
+        let s = settings(dir.path(), ClipFormat::Flac);
+        let rel = "2026-05-15/Wren/2026-05-15T10-00-00.000Z_mic0_0.80.flac";
+        let samples: Vec<f32> = (0..96_000).map(|i| (i as f32 * 0.03).sin() * 0.3).collect();
+        let info = write_clip_files(&s, rel, &samples).unwrap();
         assert_eq!(
-            png,
-            "2026-05-15/Wren/2026-05-15T10-00-00.000Z_mic0_0.80.png"
+            info.spectrogram_path.as_deref(),
+            Some("2026-05-15/Wren/2026-05-15T10-00-00.000Z_mic0_0.80.png")
         );
-        assert!(settings.clips_dir.join(png).exists());
-        let leftovers: Vec<_> = std::fs::read_dir(settings.clips_dir.join("2026-05-15/Wren"))
-            .unwrap()
-            .filter_map(|e| e.ok())
-            .filter(|e| e.path().to_string_lossy().ends_with(".tmp"))
-            .collect();
-        assert!(leftovers.is_empty());
+        let bytes = std::fs::read(s.clips_dir.join(rel)).unwrap();
+        assert_eq!(&bytes[..4], b"fLaC");
+        let mut reader = claxon::FlacReader::new(std::io::Cursor::new(bytes)).unwrap();
+        let decoded: Vec<i32> = reader.samples().collect::<Result<_, _>>().unwrap();
+        assert_eq!(decoded.len(), 96_000);
+        assert!(no_tmp_files(&s.clips_dir.join("2026-05-15/Wren")));
     }
 }

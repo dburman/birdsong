@@ -42,7 +42,7 @@ threads = 0                                  # 0 = CPUs - 1
 [storage]
 data_dir = "/data"
 clip_seconds = 6.0              # BirdNET-Pi EXTRACTION_LENGTH; centred on the 3 s window
-clip_format = "wav"
+clip_format = "flac"            # "flac" (lossless, about half the size) or "wav"
 spectrograms = true
 
 [retention]

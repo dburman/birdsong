@@ -190,7 +190,20 @@ impl ModelConfig {
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
 pub enum ClipFormat {
+    /// Lossless and about half the size of WAV. BirdWeather uploads are always FLAC.
+    Flac,
+    /// Uncompressed 16-bit PCM.
     Wav,
+}
+
+impl ClipFormat {
+    /// File extension without the dot.
+    pub fn extension(&self) -> &'static str {
+        match self {
+            ClipFormat::Flac => "flac",
+            ClipFormat::Wav => "wav",
+        }
+    }
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -210,7 +223,7 @@ impl Default for StorageConfig {
         Self {
             data_dir: PathBuf::from("/data"),
             clip_seconds: 6.0,
-            clip_format: ClipFormat::Wav,
+            clip_format: ClipFormat::Flac,
             spectrograms: true,
         }
     }
@@ -506,6 +519,20 @@ device = "hw:1,0"
         assert!(bad("[audio]\nring_buffer_seconds = 10.0").contains("ring_buffer_seconds"));
         assert!(bad("[[audio.sources]]\nid = \"mic0\"\nkind = \"rtsp\"").contains("duplicate"));
         assert!(bad("[[audio.sources]]\nid = \"cam\"\nkind = \"rtsp\"").contains("needs `url`"));
+    }
+
+    #[test]
+    fn clip_format_defaults_to_flac_and_accepts_wav() {
+        assert_eq!(
+            Config::from_toml(MINIMAL).unwrap().storage.clip_format,
+            ClipFormat::Flac
+        );
+        let wav =
+            Config::from_toml(&format!("{MINIMAL}\n[storage]\nclip_format = \"wav\"")).unwrap();
+        assert_eq!(wav.storage.clip_format.extension(), "wav");
+        assert!(
+            Config::from_toml(&format!("{MINIMAL}\n[storage]\nclip_format = \"mp3\"")).is_err()
+        );
     }
 
     #[test]

@@ -943,7 +943,7 @@ a few minutes outdoors.
 ### Step 12 — Nice-to-haves (each is optional, independent, pick by owner priority)
 
 - `cpal` ALSA source (drops the ffmpeg dependency for USB mics).
-- FLAC clips (`flacenc`, pure Rust) to cut disk use ~50 %.
+- ~~FLAC clips (`flacenc`, pure Rust) to cut disk use ~50 %.~~ **Done 2026-09-15**: `storage.clip_format = "flac"` is the default (DECISIONS #20).
 - Webhook / ntfy / MQTT notifications on new species or configurable species.
 - Home Assistant MQTT discovery.
 - BirdWeather upload (BirdNET-Pi feature).

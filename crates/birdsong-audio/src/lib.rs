@@ -13,6 +13,7 @@
 mod chunker;
 mod error;
 mod ffmpeg;
+pub mod flac;
 mod frame;
 mod ring;
 mod source;

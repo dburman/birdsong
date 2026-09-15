@@ -759,3 +759,34 @@ async fn prometheus_metrics() {
         assert!(value.parse::<f64>().is_ok(), "{line}");
     }
 }
+
+#[tokio::test]
+async fn flac_clips_are_served_as_audio_flac() {
+    let env = env().await;
+    let rel = "2026-05-15/Northern_Cardinal/clip.flac";
+    let path = env.state.clips_dir.join(rel);
+    std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+    let samples: Vec<f32> = (0..48_000).map(|i| (i as f32 * 0.02).sin() * 0.2).collect();
+    let bytes = birdsong_audio::flac::write_flac(&path, &samples, 48_000).unwrap();
+    env.state
+        .store
+        .set_clip(
+            &[11],
+            Some(&ClipInfo {
+                clip_path: rel.into(),
+                clip_bytes: bytes,
+                spectrogram_path: None,
+            }),
+        )
+        .await
+        .unwrap();
+    let (status, headers, body) = send(
+        &env.router,
+        "/api/v1/detections/11/audio",
+        &[("range", "bytes=0-3")],
+    )
+    .await;
+    assert_eq!(status, StatusCode::PARTIAL_CONTENT);
+    assert_eq!(headers[header::CONTENT_TYPE], "audio/flac");
+    assert_eq!(body, b"fLaC");
+}

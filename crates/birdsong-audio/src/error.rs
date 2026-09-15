@@ -27,6 +27,8 @@ pub enum AudioError {
     Config { id: String, message: String },
     #[error("cannot encode {path}: {message}")]
     Encode { path: PathBuf, message: String },
+    #[error("FLAC encoding failed: {0}")]
+    FlacEncode(String),
     #[error("background task failed: {0}")]
     Task(String),
 }

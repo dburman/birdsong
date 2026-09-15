@@ -58,6 +58,8 @@ tempfile = "3"
 hound = "3.5"
 rustfft = "6"
 png = "0.18"
+flacenc = { version = "0.5", default-features = false }
+claxon = "0.4"
 tract-onnx = "0.23"
 
 [profile.release]
