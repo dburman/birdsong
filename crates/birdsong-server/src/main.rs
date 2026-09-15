@@ -3,7 +3,7 @@
 
 use std::path::PathBuf;
 use std::sync::Arc;
-use std::time::Instant;
+use std::time::{Duration, Instant};
 
 use anyhow::Context;
 use birdsong_core::Config;
@@ -80,6 +80,15 @@ enum Command {
         #[arg(long)]
         json: bool,
     },
+    /// Exit 0 if the HTTP API answers with 2xx (used by the Docker HEALTHCHECK).
+    Healthcheck {
+        /// Health endpoint to request.
+        #[arg(long, default_value = "http://127.0.0.1:8080/api/v1/health")]
+        url: String,
+        /// Give up after this many seconds.
+        #[arg(long, default_value_t = 5)]
+        timeout_secs: u64,
+    },
 }
 
 /// Shared options for the offline tools.
@@ -119,6 +128,12 @@ fn init_logging() {
 async fn main() -> anyhow::Result<()> {
     init_logging();
     match Cli::parse().command {
+        Command::Healthcheck { url, timeout_secs } => {
+            let timeout = Duration::from_secs(timeout_secs.max(1));
+            let status = birdsong_server::healthcheck::check(&url, timeout).await?;
+            println!("ok: HTTP {status} from {url}");
+            Ok(())
+        }
         Command::CheckConfig { config } => {
             let cfg = Config::load(Some(&config))?;
             print!("{}", cfg.to_toml());

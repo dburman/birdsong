@@ -1,4 +1,4 @@
-.PHONY: check test run docker-build
+.PHONY: check test run docker-build models
 
 ## fmt + clippy + tests (what CI runs)
 check:
@@ -13,6 +13,10 @@ test:
 run:
 	cargo run --release -p birdsong-server -- run --config config/birdsong.toml
 
-## build the Raspberry Pi image (Dockerfile arrives in Step 10; the spike image works today)
+## build the Raspberry Pi image and load it into the local Docker
 docker-build:
-	docker buildx build --platform linux/arm64 -f docker/spike.Dockerfile -t birdsong-spike:arm64 .
+	docker buildx build --platform linux/arm64 -t birdsong:latest --load .
+
+## download and convert the BirdNET models into ./models (needs Docker)
+models:
+	scripts/fetch-models.sh

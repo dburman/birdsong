@@ -1,5 +1,11 @@
-target/
-models/
-data/
-tools/convert_model/.venv/
+*.md
 .git/
+.github/
+data/
+docs/
+models/
+scripts/
+target/
+tools/convert_model/.venv/
+tools/
+!tools/convert_model/export_headless_v24.py

@@ -34,6 +34,26 @@ uv venv -p 3.12 .venv && uv pip install -p .venv/bin/python -r requirements.txt
 .venv/bin/python export_headless_v24.py --wav ../fixtures/soundscape_15s.wav --golden ../fixtures/golden/soundscape_15s.json
 ```
 
+### Producing the files on another machine
+
+`scripts/fetch-models.sh` downloads both Zenodo archives (the Keras one holds the classifier to
+convert, the TFLite one holds the location model), verifies their checksums, and converts them in
+`docker/convert-models.Dockerfile` with pinned versions (TensorFlow 2.21.0, tf2onnx 1.17.0,
+Python 3.12). The conversion fails if the rebuilt network does not reproduce the TFLite reference
+logits.
+
+The ONNX files it produces are **numerically equivalent but not byte-identical** to the checksums
+above, because a different TensorFlow build serialises the graph differently. Verified 2026-09-15
+on linux/arm64:
+
+| Check with the container-converted files | Result |
+|------------------------------------------|--------|
+| `birdsong analyze --json` on `soundscape_15s.wav` vs golden logits | identical top-5 on all chunks, worst logit error 0.0003 |
+| `birdsong species-list`, Boston week 20 / year-round | 126 / 236, same as the TFLite reference |
+| Mel filterbank dumps | byte-identical |
+
+The fetch script therefore reports a checksum difference on the ONNX files as a warning, not an error.
+
 ### Why the model is split ("headless" + Rust frontend)
 
 The Keras graph is `INPUT(144000) → MEL_SPEC1, MEL_SPEC2 → concatenate(96,511,2) → CNN → 6522`.

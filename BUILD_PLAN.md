@@ -858,6 +858,25 @@ dashboard for the core feature.
 
 ### Step 10 — Docker for Raspberry Pi
 
+> **STATUS: DONE (2026-09-15), except the on-Pi check.** `Dockerfile`: the Rust stage runs on the
+> build machine's architecture and cross-compiles for `TARGETARCH` (aarch64 or x86-64, with
+> BuildKit cache mounts), so arm64 images build without emulating the compiler; the runtime stage
+> is `debian:bookworm-slim` with ffmpeg 5.1 (ALSA capture) as uid 1000 in the `audio` group, with
+> `HEALTHCHECK` using the new `birdsong healthcheck` subcommand (no curl in the image).
+> `docker-compose.yml` passes `/dev/snd`, adds the `audio` group, mounts `config`, `models`
+> (read-only) and `data`, and sets a 20 s stop grace period. Models are not in the image:
+> `scripts/fetch-models.sh` downloads **both** Zenodo archives (Keras for the classifier, TFLite
+> for the location model), verifies checksums, and converts them in
+> `docker/convert-models.Dockerfile` with pinned TensorFlow 2.21.0 / tf2onnx 1.17.0; conversion
+> fails unless the rebuilt network reproduces the reference logits. `docs/RASPBERRY_PI.md` covers
+> setup, microphone naming (`plughw:CARD=...`), configuration, checking it keeps up, and
+> troubleshooting. CI gains a job building linux/amd64 and linux/arm64 images.
+> Verified on the development machine: both images build (arm64 native about 4 min, amd64
+> cross-compiled about 5 min); the arm64 image detects on the fixture, writes clip and PNG, answers
+> health from the host, passes `birdsong healthcheck` inside, and stops gracefully under 1 s;
+> container-converted models are equivalent (worst logit error 0.0003, same species counts).
+> **Not yet done:** running on a real Raspberry Pi with a USB microphone, and Pi benchmarks.
+
 **Objective.** `docker compose up` on a 64-bit Pi OS works.
 
 **Deliverables.**

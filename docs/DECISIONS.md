@@ -230,3 +230,26 @@ One entry per non-obvious decision. Newest at the bottom. Format: Decision / Why
   built with. Relative URLs keep the page working behind a reverse-proxy path prefix.
 - **Rejected.** Chart.js (plan default, ~200 KB for two charts); server-side SVG with `plotters`
   (a new dependency and less interactive); serving `static/` from disk (another thing to mount).
+
+## 18. 2026-09-15 — Docker build, image contents and model provisioning
+
+- **Decision.**
+  - The build stage runs on `$BUILDPLATFORM` and cross-compiles with Debian's cross GCC for the
+    target triple (native GCC when the architectures match). Only the small runtime stage runs
+    under emulation, for `apt-get install`.
+  - The image contains the binary, ffmpeg and CA certificates, and runs as uid 1000 in the
+    `audio` group. The dashboard is inside the binary (DECISIONS #17); models, configuration and
+    data are mounts.
+  - `birdsong healthcheck` is a built-in HTTP GET, so the image needs no curl.
+  - Models are never redistributed: users run `scripts/fetch-models.sh`, which downloads the
+    official archives and converts them in a pinned container. Converted ONNX files are compared
+    against `docs/MODEL.md` checksums as a warning only, because a different TensorFlow build
+    produces byte-different but numerically equivalent graphs; the conversion itself enforces
+    equivalence against the golden logits.
+  - `plughw:` device names are recommended over `hw:` so ALSA converts rate and channels.
+- **Why.** Cross-compiling keeps arm64 image builds to minutes on x86-64 CI runners instead of the
+  hour or more a QEMU-emulated Rust build takes. Not redistributing respects the CC BY-NC-SA terms
+  without us deciding how others may use the files.
+- **Rejected.** Baking models into the image (licence, 80 MB, and every model change rebuilds the
+  image); publishing converted models as release assets (redistribution the owner has not
+  decided on); `cargo-chef` (BuildKit cache mounts do the same job without another tool).

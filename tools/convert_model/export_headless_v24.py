@@ -29,6 +29,8 @@ def main():
     ap.add_argument("--out-dir", default="../../models")
     ap.add_argument("--wav", default="../fixtures/soundscape.wav")
     ap.add_argument("--golden", default="../fixtures/golden/soundscape.json")
+    ap.add_argument("--no-reference", action="store_true",
+                    help="do not write the reference spectrogram next to the golden file")
     a = ap.parse_args()
 
     Mel = load_mel_layer_class(a.models_dir)
@@ -70,6 +72,8 @@ def main():
         err = float(np.max(np.abs(logits - np.array(c["logits"]))))
         max_err = max(max_err, err)
     print(f"keras frontend+headless vs tflite golden (5 chunks): max|dlogit| = {max_err:.4f}", file=sys.stderr)
+    if max_err > 0.05:
+        sys.exit(f"conversion check failed: logits differ from the TFLite reference by {max_err:.4f}")
 
     # --- 4. export ONNX ---
     onnx_path = os.path.join(a.out_dir, "birdnet-v2.4-headless.onnx")
@@ -93,6 +97,8 @@ def main():
     print(json.dumps(params, indent=2), file=sys.stderr)
 
     # --- 6. reference spectrogram of chunk 0 for the Rust frontend test (binary f32, NHWC (96,511,2)) ---
+    if a.no_reference:
+        return
     stem = os.path.splitext(os.path.basename(a.wav))[0]
     spec_path = os.path.join(os.path.dirname(a.golden), f"{stem}_chunk0_spec.f32")
     specs[0].astype(np.float32).tofile(spec_path)
