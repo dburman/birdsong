@@ -1,5 +1,8 @@
 //! PNG spectrograms for saved clips: STFT magnitude in dB, mapped through a dark-to-bright colour
 //! ramp. Deliberately simple; it is not meant to match BirdNET-Pi's sox rendering.
+//!
+//! Images are written as 8-bit indexed PNGs (256-colour palette), about a third of the size of
+//! RGB, because spectrogram files count towards the clip retention size cap.
 
 use std::io::BufWriter;
 use std::path::Path;
@@ -56,8 +59,15 @@ fn colour(v: f32) -> [u8; 3] {
     [252, 255, 164]
 }
 
-/// Render to row-major RGB8 bytes (`width × height × 3`), low frequencies at the bottom.
-pub fn render_rgb(samples: &[f32], sample_rate: u32, opts: &SpectrogramOptions) -> Vec<u8> {
+/// The 256-entry RGB palette (768 bytes); index `i` is the colour for level `i / 255`.
+pub fn palette() -> Vec<u8> {
+    (0..=255u32)
+        .flat_map(|i| colour(i as f32 / 255.0))
+        .collect()
+}
+
+/// Render to row-major palette indices (`width × height`), low frequencies at the bottom.
+pub fn render_indexed(samples: &[f32], sample_rate: u32, opts: &SpectrogramOptions) -> Vec<u8> {
     let (w, h) = (opts.width.max(1) as usize, opts.height.max(1) as usize);
     let n = opts.fft_size.max(16);
     let hop = opts.hop.max(1);
@@ -98,7 +108,7 @@ pub fn render_rgb(samples: &[f32], sample_rate: u32, opts: &SpectrogramOptions) 
     let floor = (max_db - opts.dynamic_range_db).max(-120.0);
     let range = (max_db - floor).max(1e-3);
 
-    let mut rgb = vec![0u8; w * h * 3];
+    let mut out = vec![0u8; w * h];
     for x in 0..w {
         let f0 = x * frames / w;
         let f1 = ((x + 1) * frames / w).max(f0 + 1).min(frames);
@@ -112,15 +122,26 @@ pub fn render_rgb(samples: &[f32], sample_rate: u32, opts: &SpectrogramOptions) 
                     peak = peak.max(db[f * bins + b]);
                 }
             }
-            let px = colour((peak - floor) / range);
-            let o = (y * w + x) * 3;
-            rgb[o..o + 3].copy_from_slice(&px);
+            let level = ((peak - floor) / range).clamp(0.0, 1.0);
+            out[y * w + x] = (level * 255.0).round() as u8;
         }
     }
-    rgb
+    out
 }
 
-/// Render and write a PNG. Returns the file size in bytes.
+/// Render to row-major RGB8 bytes (`width × height × 3`).
+pub fn render_rgb(samples: &[f32], sample_rate: u32, opts: &SpectrogramOptions) -> Vec<u8> {
+    let pal = palette();
+    render_indexed(samples, sample_rate, opts)
+        .into_iter()
+        .flat_map(|i| {
+            let o = i as usize * 3;
+            [pal[o], pal[o + 1], pal[o + 2]]
+        })
+        .collect()
+}
+
+/// Render and write an indexed PNG. Returns the file size in bytes.
 pub fn write_png(
     path: &Path,
     samples: &[f32],
@@ -135,14 +156,15 @@ pub fn write_png(
         path: path.to_path_buf(),
         message: e.to_string(),
     };
-    let rgb = render_rgb(samples, sample_rate, opts);
+    let indices = render_indexed(samples, sample_rate, opts);
     let file = std::fs::File::create(path).map_err(io)?;
     let mut encoder =
         png::Encoder::new(BufWriter::new(file), opts.width.max(1), opts.height.max(1));
-    encoder.set_color(png::ColorType::Rgb);
+    encoder.set_color(png::ColorType::Indexed);
     encoder.set_depth(png::BitDepth::Eight);
+    encoder.set_palette(palette());
     let mut writer = encoder.write_header().map_err(encode)?;
-    writer.write_image_data(&rgb).map_err(encode)?;
+    writer.write_image_data(&indices).map_err(encode)?;
     writer.finish().map_err(encode)?;
     std::fs::metadata(path).map(|m| m.len()).map_err(io)
 }
@@ -158,7 +180,7 @@ mod tests {
     }
 
     #[test]
-    fn png_has_requested_size() {
+    fn png_has_requested_size_and_palette() {
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("s.png");
         let bytes = write_png(
@@ -174,6 +196,8 @@ mod tests {
         let reader = decoder.read_info().unwrap();
         let info = reader.info();
         assert_eq!((info.width, info.height), (800, 300));
+        assert_eq!(info.color_type, png::ColorType::Indexed);
+        assert_eq!(info.palette.as_ref().map(|p| p.len()), Some(768));
     }
 
     #[test]
@@ -200,7 +224,10 @@ mod tests {
             "silence renders dark"
         );
         assert_eq!(render_rgb(&[0.1; 10], 48_000, &opts).len(), 800 * 300 * 3);
-        assert_eq!(colour(0.0), [0, 0, 4]);
-        assert_eq!(colour(1.0), [252, 255, 164]);
+        let pal = palette();
+        assert_eq!(
+            (&pal[..3], &pal[765..]),
+            (&[0u8, 0, 4][..], &[252u8, 255, 164][..])
+        );
     }
 }

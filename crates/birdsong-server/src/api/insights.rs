@@ -20,9 +20,10 @@ pub const RECENT_WINDOWS: [(&str, i64); 5] = [
 /// `GET /health`
 pub async fn health(State(state): State<AppState>) -> Json<Value> {
     let stats = state.stats.snapshot();
+    // Wall clock, not audio time: files decoded faster than real time stamp chunks in the future.
     let since_last = stats
-        .last_chunk_at
-        .map(|t| (Utc::now() - t).num_milliseconds() as f64 / 1000.0);
+        .last_processed_at
+        .map(|t| (Utc::now() - t).num_milliseconds().max(0) as f64 / 1000.0);
     Json(json!({
         "status": "ok",
         "version": env!("CARGO_PKG_VERSION"),

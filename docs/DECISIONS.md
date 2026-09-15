@@ -205,3 +205,16 @@ One entry per non-obvious decision. Newest at the bottom. Format: Decision / Why
   act on. Shutdown stays prompt for `docker stop`.
 - **Rejected.** axum's typed `Query<T>` extractor (plain-text rejections); sending events
   straight from the broadcast without a lookup (inconsistent shape).
+
+## 16. 2026-09-15 — Spectrograms count towards the clip size cap
+
+- **Decision.** `clip_bytes` records the audio and spectrogram files together, so
+  `retention.clip_max_total_mb` bounds real disk use. Spectrograms are 8-bit indexed PNGs
+  (256-colour palette) instead of RGB. Health liveness uses the wall-clock time the newest chunk
+  was processed (`last_processed_at`), not its audio timestamp.
+- **Why.** A smoke run of the real binary showed an RGB spectrogram (446 KB) larger than its 6 s
+  WAV (432 KB) while only the WAV was counted, so disk use could reach about twice the cap. The
+  same run showed a negative `seconds_since_last_chunk` when files are decoded faster than real
+  time.
+- **Rejected.** A separate `spectrogram_bytes` column (needs a migration for no practical gain);
+  grayscale PNGs (smaller still, but much harder to read).

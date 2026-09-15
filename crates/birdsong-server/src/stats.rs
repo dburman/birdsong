@@ -25,6 +25,8 @@ pub struct PipelineStats {
     inference_micros_ewma: AtomicU64,
     /// Start time of the newest processed chunk, microseconds since the epoch; 0 = none yet.
     last_chunk_at_micros: AtomicI64,
+    /// Wall-clock time the newest chunk finished inference, microseconds since the epoch; 0 = none.
+    last_processed_at_micros: AtomicI64,
 }
 
 /// A consistent-enough copy of the counters, for logs and the API.
@@ -40,7 +42,10 @@ pub struct StatsSnapshot {
     pub clips_written: u64,
     pub clip_errors: u64,
     pub mean_inference_ms: Option<f64>,
+    /// Start of the newest processed chunk (audio time).
     pub last_chunk_at: Option<DateTime<Utc>>,
+    /// When the newest chunk was processed (wall clock); use this for liveness checks.
+    pub last_processed_at: Option<DateTime<Utc>>,
 }
 
 impl PipelineStats {
@@ -52,6 +57,8 @@ impl PipelineStats {
         self.chunks_processed.fetch_add(1, Ordering::Relaxed);
         self.last_chunk_at_micros
             .store(start_at.timestamp_micros(), Ordering::Relaxed);
+        self.last_processed_at_micros
+            .store(Utc::now().timestamp_micros(), Ordering::Relaxed);
         let sample = inference.as_micros().min(u64::MAX as u128) as u64;
         // Single writer (the inference thread), so load-then-store is race free.
         let old = self.inference_micros_ewma.load(Ordering::Relaxed);
@@ -99,6 +106,7 @@ impl PipelineStats {
     pub fn snapshot(&self) -> StatsSnapshot {
         let ewma = self.inference_micros_ewma.load(Ordering::Relaxed);
         let last = self.last_chunk_at_micros.load(Ordering::Relaxed);
+        let processed = self.last_processed_at_micros.load(Ordering::Relaxed);
         StatsSnapshot {
             chunks_processed: self.chunks_processed.load(Ordering::Relaxed),
             chunks_dropped: self.chunks_dropped.load(Ordering::Relaxed),
@@ -112,6 +120,9 @@ impl PipelineStats {
             mean_inference_ms: (ewma > 0).then(|| ewma as f64 / 1000.0),
             last_chunk_at: (last != 0)
                 .then(|| DateTime::from_timestamp_micros(last))
+                .flatten(),
+            last_processed_at: (processed != 0)
+                .then(|| DateTime::from_timestamp_micros(processed))
                 .flatten(),
         }
     }
@@ -143,5 +154,8 @@ mod tests {
             (2, 1, 3)
         );
         assert_eq!(snap.last_chunk_at, Some(t));
+        assert!(snap
+            .last_processed_at
+            .is_some_and(|p| (Utc::now() - p).num_seconds() < 5));
     }
 }

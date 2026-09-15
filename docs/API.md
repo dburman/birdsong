@@ -59,13 +59,15 @@ Returned by the detection endpoints and as the `data` of stream events.
   "source_id": "mic0",
   "model_id": "birdnet-v2.4",
   "clip_path": "2026-05-15/Black_capped_Chickadee/2026-05-15T10-00-00.000Z_mic0_0.75.wav",
-  "clip_bytes": 432044,
+  "clip_bytes": 612044,
   "spectrogram_path": "2026-05-15/Black_capped_Chickadee/2026-05-15T10-00-00.000Z_mic0_0.75.png"
 }
 ```
 
-`detected_at` is the start of the 3-second analysis window. `clip_path` and `spectrogram_path`
-become `null` when the retention window deletes the files; the detection itself is kept. A clip is
+`detected_at` is the start of the 3-second analysis window. `clip_bytes` is the disk space used by
+the clip's audio and spectrogram together, which is what `retention.clip_max_total_mb` counts.
+`clip_path` and `spectrogram_path` become `null` when the retention window deletes the files; the
+detection itself is kept. A clip is
 attached a moment after the detection is stored, so a brand-new detection can briefly have
 `clip_path: null`.
 
@@ -92,12 +94,14 @@ curl -s "$PI/api/v1/health"
     "chunks_processed": 1200, "chunks_dropped": 0, "masked_chunks": 4, "gaps": 0,
     "detections": 57, "inference_errors": 0, "store_errors": 0,
     "clips_written": 41, "clip_errors": 0, "mean_inference_ms": 312.5,
-    "last_chunk_at": "2026-05-15T10:59:57.000000Z"
+    "last_chunk_at": "2026-05-15T10:59:57.000000Z",
+    "last_processed_at": "2026-05-15T11:00:00.300000Z"
   }
 }
 ```
 
-A growing `seconds_since_last_chunk` means audio stopped arriving; a growing `chunks_dropped`
+`last_chunk_at` is the audio time of the newest analysed chunk; `seconds_since_last_chunk` is
+measured from when it was processed (wall clock). A growing `seconds_since_last_chunk` means audio stopped arriving; a growing `chunks_dropped`
 means the computer cannot keep up with inference.
 
 ### `GET /api/v1/detections`
@@ -160,7 +164,7 @@ curl -s -H "Range: bytes=0-99" -o head.bin "$PI/api/v1/detections/1234/audio"
 
 ### `GET /api/v1/detections/{id}/spectrogram.png`
 
-An 800 × 300 PNG spectrogram (0 to 12 kHz) of the clip. `404` when absent.
+An 800 × 300 indexed-colour PNG spectrogram (0 to 12 kHz) of the clip. `404` when absent.
 
 ```bash
 curl -s -o spec.png "$PI/api/v1/detections/1234/spectrogram.png"

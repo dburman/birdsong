@@ -78,7 +78,7 @@ pub fn clip_relative_path(
 }
 
 /// Write the WAV (and spectrogram) atomically: `.tmp` then rename. A failed spectrogram is logged
-/// and skipped; it never costs the clip.
+/// and skipped; it never costs the clip. `clip_bytes` is the size of both files together.
 pub fn write_clip_files(
     settings: &ClipSettings,
     relative: &str,
@@ -92,10 +92,11 @@ pub fn write_clip_files(
     let tmp = path.with_extension("wav.tmp");
     wav::write_wav(&tmp, samples, SAMPLE_RATE_HZ)?;
     std::fs::rename(&tmp, &path).with_context(|| format!("renaming {}", tmp.display()))?;
-    let clip_bytes = std::fs::metadata(&path)
+    let wav_bytes = std::fs::metadata(&path)
         .with_context(|| format!("reading {}", path.display()))?
         .len();
 
+    let mut png_bytes = 0;
     let spectrogram_path = if settings.spectrograms {
         let relative_png = format!("{}.png", relative.strip_suffix(".wav").unwrap_or(relative));
         let png = settings.clips_dir.join(&relative_png);
@@ -109,7 +110,10 @@ pub fn write_clip_files(
         .map_err(anyhow::Error::from)
         .and_then(|_| std::fs::rename(&tmp, &png).context("renaming spectrogram"));
         match written {
-            Ok(()) => Some(relative_png),
+            Ok(()) => {
+                png_bytes = std::fs::metadata(&png).map(|m| m.len()).unwrap_or(0);
+                Some(relative_png)
+            }
             Err(e) => {
                 tracing::warn!(path = %png.display(), error = %e, "spectrogram not written");
                 let _ = std::fs::remove_file(&tmp);
@@ -121,7 +125,8 @@ pub fn write_clip_files(
     };
     Ok(ClipInfo {
         clip_path: relative.to_string(),
-        clip_bytes,
+        // Disk used by the clip: audio plus spectrogram. This is what the retention size cap counts.
+        clip_bytes: wav_bytes + png_bytes,
         spectrogram_path,
     })
 }
@@ -336,8 +341,18 @@ mod tests {
         let rel = "2026-05-15/Wren/2026-05-15T10-00-00.000Z_mic0_0.80.wav";
         let info = write_clip_files(&settings, rel, &vec![0.1; 48_000]).unwrap();
         assert_eq!(info.clip_path, rel);
-        assert_eq!(info.clip_bytes, 44 + 2 * 48_000);
         let png = info.spectrogram_path.as_deref().unwrap();
+        let on_disk = |rel: &str| {
+            std::fs::metadata(settings.clips_dir.join(rel))
+                .unwrap()
+                .len()
+        };
+        assert_eq!(on_disk(rel), 44 + 2 * 48_000);
+        assert_eq!(
+            info.clip_bytes,
+            on_disk(rel) + on_disk(png),
+            "audio plus spectrogram"
+        );
         assert_eq!(
             png,
             "2026-05-15/Wren/2026-05-15T10-00-00.000Z_mic0_0.80.png"
