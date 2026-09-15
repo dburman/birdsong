@@ -6,21 +6,30 @@
 //! POST {api}/stations/{token}/soundscapes?timestamp=<RFC 3339>&type=flac   (FLAC body) -> {"success":true,"soundscape":{"id":N}}
 //! POST {api}/stations/{token}/detections                                    (JSON body)
 //! ```
+//!
+//! Shutdown: once the pipeline's cancellation token fires, queued uploads are skipped, retry waits
+//! end early, and an upload in progress stops before its next request. A request already on the
+//! wire is bounded by the client timeouts (5 s to connect, 15 s in total).
 
 use std::fmt;
 use std::sync::Arc;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use birdsong_core::SAMPLE_RATE_HZ;
 use chrono::{DateTime, SecondsFormat, Utc};
 use chrono_tz::Tz;
 use serde::{Deserialize, Serialize};
 use tokio::sync::mpsc;
+use tokio_util::sync::CancellationToken;
 
 use crate::stats::PipelineStats;
 
 /// BirdWeather's identifier for BirdNET V2.4 detections.
 pub const ALGORITHM_V24: &str = "2p4";
+/// Connection timeout for BirdWeather requests.
+pub const CONNECT_TIMEOUT: Duration = Duration::from_secs(5);
+/// Total time allowed for one BirdWeather request, including the upload body and response.
+pub const REQUEST_TIMEOUT: Duration = Duration::from_secs(15);
 
 /// Why an upload did not succeed.
 #[derive(Debug)]
@@ -33,6 +42,8 @@ pub enum UploadError {
     Rejected(String),
     /// The clip could not be encoded as FLAC.
     Encode(String),
+    /// Shutdown started before the upload finished.
+    Cancelled,
 }
 
 impl fmt::Display for UploadError {
@@ -42,6 +53,7 @@ impl fmt::Display for UploadError {
             Self::Status { status, body } => write!(f, "HTTP {status}: {body}"),
             Self::Rejected(m) => write!(f, "rejected: {m}"),
             Self::Encode(m) => write!(f, "FLAC encoding: {m}"),
+            Self::Cancelled => write!(f, "cancelled by shutdown"),
         }
     }
 }
@@ -110,6 +122,18 @@ pub fn station_timestamp(at: DateTime<Utc>, tz: Tz) -> String {
         .to_rfc3339_opts(SecondsFormat::Millis, false)
 }
 
+/// Sleep for `duration`, waking early if `cancel` fires. Returns false when cancelled.
+fn sleep_unless_cancelled(duration: Duration, cancel: &CancellationToken) -> bool {
+    let until = Instant::now() + duration;
+    while Instant::now() < until {
+        if cancel.is_cancelled() {
+            return false;
+        }
+        std::thread::sleep((until - Instant::now()).min(Duration::from_millis(50)));
+    }
+    !cancel.is_cancelled()
+}
+
 /// Blocking HTTP client for the two BirdWeather endpoints.
 pub struct BirdWeatherClient {
     agent: ureq::Agent,
@@ -122,7 +146,8 @@ pub struct BirdWeatherClient {
 impl BirdWeatherClient {
     pub fn new(api_url: &str, token: &str) -> Self {
         let agent: ureq::Agent = ureq::Agent::config_builder()
-            .timeout_global(Some(Duration::from_secs(45)))
+            .timeout_connect(Some(CONNECT_TIMEOUT))
+            .timeout_global(Some(REQUEST_TIMEOUT))
             .http_status_as_error(false)
             .user_agent(concat!("birdsong/", env!("CARGO_PKG_VERSION")))
             .build()
@@ -142,15 +167,21 @@ impl BirdWeatherClient {
     fn with_retries<T>(
         &self,
         what: &str,
+        cancel: &CancellationToken,
         mut call: impl FnMut() -> Result<T, UploadError>,
     ) -> Result<T, UploadError> {
         let mut delays = self.retry_delays.iter();
         loop {
+            if cancel.is_cancelled() {
+                return Err(UploadError::Cancelled);
+            }
             match call() {
                 Err(e) if e.is_transient() => match delays.next() {
                     Some(delay) => {
                         tracing::warn!(error = %e, retry_in = ?delay, "BirdWeather {what} failed; retrying");
-                        std::thread::sleep(*delay);
+                        if !sleep_unless_cancelled(*delay, cancel) {
+                            return Err(UploadError::Cancelled);
+                        }
                     }
                     None => return Err(e),
                 },
@@ -180,12 +211,17 @@ impl BirdWeatherClient {
     }
 
     /// Upload FLAC audio; returns the soundscape id.
-    pub fn upload_soundscape(&self, flac: &[u8], timestamp: &str) -> Result<i64, UploadError> {
+    pub fn upload_soundscape(
+        &self,
+        flac: &[u8],
+        timestamp: &str,
+        cancel: &CancellationToken,
+    ) -> Result<i64, UploadError> {
         let url = self.station_url(&format!(
             "soundscapes?timestamp={}&type=flac",
             encode_query_value(timestamp)
         ));
-        self.with_retries("soundscape upload", || {
+        self.with_retries("soundscape upload", cancel, || {
             let response = self
                 .agent
                 .post(&url)
@@ -207,9 +243,13 @@ impl BirdWeatherClient {
     }
 
     /// Post one detection that refers to an uploaded soundscape.
-    pub fn post_detection(&self, detection: &DetectionUpload) -> Result<(), UploadError> {
+    pub fn post_detection(
+        &self,
+        detection: &DetectionUpload,
+        cancel: &CancellationToken,
+    ) -> Result<(), UploadError> {
         let url = self.station_url("detections");
-        self.with_retries("detection upload", || {
+        self.with_retries("detection upload", cancel, || {
             let response = self
                 .agent
                 .post(&url)
@@ -246,17 +286,19 @@ pub struct WindowResult {
     pub detections_refused: usize,
 }
 
-/// Upload one clip as a soundscape, then its detections. Blocking.
+/// Upload one clip as a soundscape, then its detections. Blocking; stops early on `cancel`.
 pub fn upload_window(
     client: &BirdWeatherClient,
     station: Station,
     job: &UploadJob,
+    cancel: &CancellationToken,
 ) -> Result<WindowResult, UploadError> {
     let flac = birdsong_audio::flac::encode_flac(&job.clip_samples, SAMPLE_RATE_HZ)
         .map_err(|e| UploadError::Encode(e.to_string()))?;
     let soundscape_id = client.upload_soundscape(
         &flac,
         &station_timestamp(job.clip_start_at, station.timezone),
+        cancel,
     )?;
 
     let clip_seconds = job.clip_samples.len() as f64 / f64::from(SAMPLE_RATE_HZ);
@@ -278,7 +320,7 @@ pub fn upload_window(
             algorithm: ALGORITHM_V24.into(),
             confidence: *confidence,
         };
-        match client.post_detection(&upload) {
+        match client.post_detection(&upload, cancel) {
             Ok(()) => result.detections_posted += 1,
             Err(UploadError::Status { status: 422, body }) => {
                 tracing::debug!(species = %scientific, %body, "BirdWeather refused the detection");
@@ -291,17 +333,26 @@ pub fn upload_window(
 }
 
 /// Background uploader. Jobs arrive from the clip writer through a bounded channel; the clip
-/// writer never waits for the network.
-pub(crate) async fn upload_task(
+/// writer never waits for the network. After `cancel` fires, remaining jobs are skipped.
+pub async fn upload_task(
     client: Arc<BirdWeatherClient>,
     station: Station,
     mut jobs: mpsc::Receiver<UploadJob>,
     stats: Arc<PipelineStats>,
+    cancel: CancellationToken,
 ) {
+    let mut skipped = 0u64;
     while let Some(job) = jobs.recv().await {
+        if cancel.is_cancelled() {
+            skipped += 1;
+            stats.birdweather_skipped();
+            continue;
+        }
         let client = Arc::clone(&client);
+        let token = cancel.clone();
         let outcome =
-            tokio::task::spawn_blocking(move || upload_window(&client, station, &job)).await;
+            tokio::task::spawn_blocking(move || upload_window(&client, station, &job, &token))
+                .await;
         match outcome {
             Ok(Ok(result)) => {
                 stats.birdweather_uploaded(result.detections_posted as u64);
@@ -310,6 +361,10 @@ pub(crate) async fn upload_task(
                     refused = result.detections_refused,
                     "uploaded to BirdWeather"
                 );
+            }
+            Ok(Err(UploadError::Cancelled)) => {
+                skipped += 1;
+                stats.birdweather_skipped();
             }
             Ok(Err(e)) => {
                 stats.birdweather_error();
@@ -320,6 +375,9 @@ pub(crate) async fn upload_task(
                 tracing::error!(error = %e, "BirdWeather upload task panicked");
             }
         }
+    }
+    if skipped > 0 {
+        tracing::info!(skipped, "BirdWeather uploads skipped because of shutdown");
     }
 }
 
@@ -404,5 +462,16 @@ mod tests {
         }
         .is_transient());
         assert!(!UploadError::Rejected("no".into()).is_transient());
+        assert!(!UploadError::Cancelled.is_transient());
+    }
+
+    #[test]
+    fn cancellable_sleep() {
+        let token = CancellationToken::new();
+        assert!(sleep_unless_cancelled(Duration::from_millis(20), &token));
+        token.cancel();
+        let started = Instant::now();
+        assert!(!sleep_unless_cancelled(Duration::from_secs(10), &token));
+        assert!(started.elapsed() < Duration::from_millis(200));
     }
 }

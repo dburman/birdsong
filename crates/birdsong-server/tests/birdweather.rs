@@ -14,8 +14,10 @@ use axum::{Json, Router};
 use birdsong_audio::{Pacing, WavFileSource};
 use birdsong_core::Config;
 use birdsong_model::ModelBundle;
-use birdsong_server::birdweather::{upload_window, BirdWeatherClient, Station, UploadJob};
-use birdsong_server::{Backpressure, Pipeline, PipelineOptions, SourceSpec};
+use birdsong_server::birdweather::{
+    upload_task, upload_window, BirdWeatherClient, Station, UploadJob,
+};
+use birdsong_server::{Backpressure, Pipeline, PipelineOptions, PipelineStats, SourceSpec};
 use birdsong_store::{SqliteStore, StoreOptions};
 use chrono::{TimeDelta, TimeZone, Utc};
 use serde_json::{json, Value};
@@ -38,6 +40,8 @@ struct Mock {
     /// Scientific names answered with 422.
     refuse_species: Vec<String>,
     soundscape_success: bool,
+    /// Delay before answering a soundscape upload.
+    soundscape_delay: Duration,
 }
 
 type Shared = Arc<Mutex<Mock>>;
@@ -49,6 +53,8 @@ async fn soundscape(
     headers: HeaderMap,
     body: Bytes,
 ) -> (StatusCode, Json<Value>) {
+    let delay = mock.lock().unwrap().soundscape_delay;
+    tokio::time::sleep(delay).await;
     let mut m = mock.lock().unwrap();
     if !m.soundscape_failures.is_empty() {
         let status = m.soundscape_failures.remove(0);
@@ -156,7 +162,7 @@ async fn uploads_soundscape_then_detections_like_birdnet_pi() {
     .await;
     let result = tokio::task::spawn_blocking(move || {
         let client = BirdWeatherClient::new(&api, "tok_123");
-        upload_window(&client, BOSTON, &job())
+        upload_window(&client, BOSTON, &job(), &CancellationToken::new())
     })
     .await
     .unwrap()
@@ -204,7 +210,7 @@ async fn transient_failures_are_retried_and_rejections_are_not() {
     let result = tokio::task::spawn_blocking(move || {
         let mut client = BirdWeatherClient::new(&api2, "tok");
         client.retry_delays = vec![Duration::from_millis(10), Duration::from_millis(10)];
-        upload_window(&client, BOSTON, &job())
+        upload_window(&client, BOSTON, &job(), &CancellationToken::new())
     })
     .await
     .unwrap()
@@ -224,7 +230,7 @@ async fn transient_failures_are_retried_and_rejections_are_not() {
     .await;
     let err = tokio::task::spawn_blocking(move || {
         let client = BirdWeatherClient::new(&api, "bad");
-        upload_window(&client, BOSTON, &job())
+        upload_window(&client, BOSTON, &job(), &CancellationToken::new())
     })
     .await
     .unwrap()
@@ -244,7 +250,7 @@ async fn unreachable_server_fails_after_retries() {
     let err = tokio::task::spawn_blocking(move || {
         let mut client = BirdWeatherClient::new(&format!("http://127.0.0.1:{port}/api/v1"), "tok");
         client.retry_delays = vec![Duration::from_millis(5)];
-        upload_window(&client, BOSTON, &job())
+        upload_window(&client, BOSTON, &job(), &CancellationToken::new())
     })
     .await
     .unwrap()
@@ -357,4 +363,75 @@ api_url = {api:?}
     );
     assert_eq!(chickadee["soundscapeEndTime"], 3.0);
     assert_eq!(chickadee["timestamp"], "2026-05-15T06:00:00.000-04:00");
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn cancellation_ends_retry_waits_promptly() {
+    let (api, _mock) = mock_server(Mock {
+        soundscape_success: true,
+        soundscape_failures: vec![503; 10],
+        ..Default::default()
+    })
+    .await;
+    let cancel = CancellationToken::new();
+    let token = cancel.clone();
+    let started = std::time::Instant::now();
+    let upload = tokio::task::spawn_blocking(move || {
+        let mut client = BirdWeatherClient::new(&api, "tok");
+        client.retry_delays = vec![Duration::from_secs(10), Duration::from_secs(10)];
+        upload_window(&client, BOSTON, &job(), &token)
+    });
+    tokio::time::sleep(Duration::from_millis(300)).await;
+    cancel.cancel();
+    let err = tokio::time::timeout(Duration::from_secs(3), upload)
+        .await
+        .expect("returns promptly")
+        .unwrap()
+        .unwrap_err();
+    assert!(
+        matches!(err, birdsong_server::birdweather::UploadError::Cancelled),
+        "{err}"
+    );
+    assert!(started.elapsed() < Duration::from_secs(3));
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn queued_uploads_are_skipped_after_shutdown() {
+    let (api, mock) = mock_server(Mock {
+        soundscape_success: true,
+        soundscape_delay: Duration::from_millis(400),
+        ..Default::default()
+    })
+    .await;
+    let (tx, rx) = tokio::sync::mpsc::channel(32);
+    for _ in 0..10 {
+        tx.send(job()).await.unwrap();
+    }
+    drop(tx);
+    let stats = Arc::new(PipelineStats::new());
+    let cancel = CancellationToken::new();
+    let client = Arc::new(BirdWeatherClient::new(&api, "tok"));
+    let task = tokio::spawn(upload_task(
+        client,
+        BOSTON,
+        rx,
+        Arc::clone(&stats),
+        cancel.clone(),
+    ));
+    tokio::time::sleep(Duration::from_millis(600)).await; // first upload done, second in flight
+    cancel.cancel();
+    tokio::time::timeout(Duration::from_secs(3), task)
+        .await
+        .expect("upload task stops promptly")
+        .unwrap();
+
+    let snap = stats.snapshot();
+    let uploaded = mock.lock().unwrap().soundscapes.len() as u64;
+    assert!(uploaded < 10, "stopped early, uploaded {uploaded}");
+    assert!(snap.birdweather_skipped >= 8, "{snap:?}");
+    assert_eq!(
+        snap.birdweather_soundscapes + snap.birdweather_skipped + snap.birdweather_errors,
+        10,
+        "{snap:?}"
+    );
 }

@@ -146,8 +146,15 @@ pub async fn metrics(State(state): State<AppState>) -> ApiResult<Response> {
         &mut out,
         "birdsong_birdweather_errors_total",
         "counter",
-        "BirdWeather uploads that failed or were skipped.",
+        "BirdWeather uploads that failed.",
         s.birdweather_errors,
+    );
+    metric(
+        &mut out,
+        "birdsong_birdweather_skipped_total",
+        "counter",
+        "BirdWeather uploads skipped at shutdown.",
+        s.birdweather_skipped,
     );
     metric(
         &mut out,

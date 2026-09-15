@@ -24,6 +24,7 @@ pub struct PipelineStats {
     birdweather_soundscapes: AtomicU64,
     birdweather_detections: AtomicU64,
     birdweather_errors: AtomicU64,
+    birdweather_skipped: AtomicU64,
     /// Exponentially weighted mean inference time in microseconds; 0 = no sample yet.
     inference_micros_ewma: AtomicU64,
     /// Start time of the newest processed chunk, microseconds since the epoch; 0 = none yet.
@@ -47,6 +48,7 @@ pub struct StatsSnapshot {
     pub birdweather_soundscapes: u64,
     pub birdweather_detections: u64,
     pub birdweather_errors: u64,
+    pub birdweather_skipped: u64,
     pub mean_inference_ms: Option<f64>,
     /// Start of the newest processed chunk (audio time).
     pub last_chunk_at: Option<DateTime<Utc>>,
@@ -115,6 +117,10 @@ impl PipelineStats {
             .fetch_add(detections, Ordering::Relaxed);
     }
 
+    pub(crate) fn birdweather_skipped(&self) {
+        self.birdweather_skipped.fetch_add(1, Ordering::Relaxed);
+    }
+
     pub(crate) fn birdweather_error(&self) {
         self.birdweather_errors.fetch_add(1, Ordering::Relaxed);
     }
@@ -136,6 +142,7 @@ impl PipelineStats {
             birdweather_soundscapes: self.birdweather_soundscapes.load(Ordering::Relaxed),
             birdweather_detections: self.birdweather_detections.load(Ordering::Relaxed),
             birdweather_errors: self.birdweather_errors.load(Ordering::Relaxed),
+            birdweather_skipped: self.birdweather_skipped.load(Ordering::Relaxed),
             mean_inference_ms: (ewma > 0).then(|| ewma as f64 / 1000.0),
             last_chunk_at: (last != 0)
                 .then(|| DateTime::from_timestamp_micros(last))

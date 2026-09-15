@@ -21,7 +21,7 @@ services:
       - ./config:/config:ro
       - ./models:/models:ro
       - ./data:/data             # database and clips; must be writable by uid 1000
-    stop_grace_period: 20s       # queued chunks are analysed and stored before exit
+    stop_grace_period: 30s       # queued chunks are stored; a BirdWeather request in flight may take up to 15 s
     healthcheck:
       test: ["CMD", "birdsong", "healthcheck", "--url", "http://127.0.0.1:8080/api/v1/health"]
       interval: 30s

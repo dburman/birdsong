@@ -203,6 +203,7 @@ impl Pipeline {
                     station,
                     rx,
                     Arc::clone(&stats),
+                    cancel.clone(),
                 ))),
             )
         } else {

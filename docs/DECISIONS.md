@@ -310,3 +310,17 @@ One entry per non-obvious decision. Newest at the bottom. Format: Decision / Why
 - **Rejected.** Uploading the whole 3 s window as a separate recording (BirdNET-Pi uploads the file
   it analysed; the saved clip is our equivalent and is already on disk); location fuzzing as in
   BirdNET-Go (BirdNET-Pi sends the configured coordinates; users can configure coarser ones).
+
+## 22. 2026-09-15 — BirdWeather uploads stop promptly at shutdown
+
+- **Decision.** The pipeline's cancellation token reaches the upload task. After it fires, queued
+  uploads are skipped and counted (`birdweather_skipped`, also in `/metrics`), retry waits end
+  early, and an upload in progress stops before its next request. Request timeouts are 5 s to
+  connect and 15 s in total, and the compose file allows 30 s to stop.
+- **Why.** ureq is a blocking client, so a request already on the wire cannot be cancelled; it can
+  only be bounded by timeouts. Without this, draining a queue of uploads while BirdWeather was
+  unreachable could take minutes, and Docker would kill the container mid-upload. Detections and
+  clips are already on disk, so skipping uploads loses only the upload.
+- **Rejected.** An async HTTP client (would cancel mid-request, but reqwest's rustls now pulls in
+  the FFI crypto library the policy excludes); uploading from the clip writer itself (network
+  trouble would delay clips).

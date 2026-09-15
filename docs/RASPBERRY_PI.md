@@ -114,7 +114,9 @@ Uploads need `station.latitude` and `station.longitude`. Every saved clip is sen
 soundscape together with the detections in it, the same way BirdNET-Pi does. Detections hidden by
 the privacy filter have no clip and are never uploaded. Uploads run in the background: if
 BirdWeather is slow or unreachable, clips are skipped for upload rather than delayed, and
-`birdweather_errors` in `/api/v1/health` counts them. The token is shown as `***` in `/api/v1/config`.
+`birdweather_errors` in `/api/v1/health` counts them. The token is shown as `***` in `/api/v1/config`. On
+shutdown, uploads still queued are skipped rather than delaying the stop, and counted as
+`birdweather_skipped`; the container is given 30 seconds to finish what is in flight.
 
 ## 5. Start
 
