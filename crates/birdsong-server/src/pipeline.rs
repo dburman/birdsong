@@ -24,6 +24,7 @@ use tokio::sync::{broadcast, mpsc};
 use tokio::task::JoinSet;
 use tokio_util::sync::CancellationToken;
 
+use crate::birdweather::{upload_task, BirdWeatherClient, Station};
 use crate::clips::{clip_task, ClipJob, ClipMsg, ClipSettings};
 use crate::queue::{Backpressure, ChunkQueue, ConsumerGuard, PushOutcome, QueueItem};
 use crate::stats::{PipelineStats, StatsSnapshot};
@@ -36,6 +37,8 @@ const FRAME_CHANNEL: usize = 64;
 const RESULT_CHANNEL: usize = 64;
 /// Clip jobs waiting for the clip writer.
 const CLIP_CHANNEL: usize = 64;
+/// Saved clips waiting to be uploaded to BirdWeather; when full, clips are skipped, never delayed.
+const UPLOAD_CHANNEL: usize = 32;
 /// Detections buffered for slow broadcast subscribers before they lag.
 const BROADCAST_CAPACITY: usize = 256;
 
@@ -181,12 +184,37 @@ impl Pipeline {
                 .spawn(move || inference_worker(bundle, queue, results_tx, stats, tz))
                 .context("starting inference thread")?
         };
+        let (upload_tx, uploads) = if cfg.birdweather.enabled() {
+            let (tx, rx) = mpsc::channel(UPLOAD_CHANNEL);
+            let client = Arc::new(BirdWeatherClient::new(
+                &cfg.birdweather.api_url,
+                &cfg.birdweather.token,
+            ));
+            let station = Station {
+                latitude: cfg.station.latitude,
+                longitude: cfg.station.longitude,
+                timezone: cfg.station.timezone,
+            };
+            tracing::info!("BirdWeather uploads enabled");
+            (
+                Some(tx),
+                Some(tokio::spawn(upload_task(
+                    client,
+                    station,
+                    rx,
+                    Arc::clone(&stats),
+                ))),
+            )
+        } else {
+            (None, None)
+        };
         let clips = tokio::spawn(clip_task(
             ClipSettings::from_config(&cfg),
             rings,
             Arc::clone(&store),
             clip_rx,
             Arc::clone(&stats),
+            upload_tx,
         ));
         let storage = tokio::spawn(storage_task(
             store,
@@ -238,6 +266,10 @@ impl Pipeline {
         let worker_result = tokio::task::spawn_blocking(move || worker.join()).await;
         let storage_result = storage.await;
         let clips_result = clips.await;
+        let uploads_result = match uploads {
+            Some(task) => Some(task.await),
+            None => None,
+        };
 
         let summary = stats.snapshot();
         tracing::info!(
@@ -258,6 +290,9 @@ impl Pipeline {
         }
         storage_result.context("storage task panicked")?;
         clips_result.context("clip writer task panicked")?;
+        if let Some(result) = uploads_result {
+            result.context("BirdWeather upload task panicked")?;
+        }
         Ok(summary)
     }
 }
@@ -473,6 +508,17 @@ async fn storage_task(
             start_at: analysis.start_at,
             common_name: best.common_name.clone(),
             confidence: best.confidence,
+            detections: analysis
+                .detections
+                .iter()
+                .map(|d| {
+                    (
+                        d.scientific_name.clone(),
+                        d.common_name.clone(),
+                        d.confidence,
+                    )
+                })
+                .collect(),
         };
         match insert_with_retry(store.as_ref(), &analysis.detections).await {
             Ok(ids) => {

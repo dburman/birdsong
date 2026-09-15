@@ -25,6 +25,7 @@ pub struct Config {
     pub storage: StorageConfig,
     pub retention: RetentionConfig,
     pub server: ServerConfig,
+    pub birdweather: BirdWeatherConfig,
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -289,6 +290,31 @@ impl ServerConfig {
     }
 }
 
+/// Uploads to BirdWeather. Disabled while `token` is empty.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields, default)]
+pub struct BirdWeatherConfig {
+    /// Station token from the BirdWeather app (keep it secret; `BIRDSONG__BIRDWEATHER__TOKEN` works).
+    pub token: String,
+    /// API base URL. Only change it for testing.
+    pub api_url: String,
+}
+
+impl Default for BirdWeatherConfig {
+    fn default() -> Self {
+        Self {
+            token: String::new(),
+            api_url: "https://app.birdweather.com/api/v1".into(),
+        }
+    }
+}
+
+impl BirdWeatherConfig {
+    pub fn enabled(&self) -> bool {
+        !self.token.trim().is_empty()
+    }
+}
+
 impl Config {
     /// Load from an optional TOML file plus `BIRDSONG__*` environment overrides, then validate.
     pub fn load(file: Option<&Path>) -> Result<Self, ConfigError> {
@@ -429,6 +455,29 @@ impl Config {
             errors.push("retention.purge_interval_minutes must be at least 1".into());
         }
 
+        let bw = &self.birdweather;
+        if bw.enabled() {
+            if !bw
+                .token
+                .trim()
+                .chars()
+                .all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_')
+            {
+                errors
+                    .push("birdweather.token may only contain letters, digits, '-' and '_'".into());
+            }
+            if !self.station.has_location() {
+                errors
+                    .push("birdweather.token is set but station.latitude/longitude are not".into());
+            }
+        }
+        if !(bw.api_url.starts_with("https://") || bw.api_url.starts_with("http://")) {
+            errors.push(format!(
+                "birdweather.api_url {:?} must start with https:// or http://",
+                bw.api_url
+            ));
+        }
+
         if let Err(e) = self.server.bind_addr() {
             errors.push(e.to_string());
         }
@@ -533,6 +582,24 @@ device = "hw:1,0"
         assert!(
             Config::from_toml(&format!("{MINIMAL}\n[storage]\nclip_format = \"mp3\"")).is_err()
         );
+    }
+
+    #[test]
+    fn birdweather_needs_a_location_and_a_clean_token() {
+        let cfg = Config::from_toml(MINIMAL).unwrap();
+        assert!(!cfg.birdweather.enabled());
+        let located = format!("{MINIMAL}\n[station]\nlatitude = 42.36\nlongitude = -71.06");
+        let ok =
+            Config::from_toml(&format!("{located}\n[birdweather]\ntoken = \"abc_123-X\"")).unwrap();
+        assert!(ok.birdweather.enabled());
+        let err = Config::from_toml(&format!("{MINIMAL}\n[birdweather]\ntoken = \"abc\""))
+            .unwrap_err()
+            .to_string();
+        assert!(err.contains("station.latitude"), "{err}");
+        let err = Config::from_toml(&format!("{located}\n[birdweather]\ntoken = \"a/b\""))
+            .unwrap_err()
+            .to_string();
+        assert!(err.contains("birdweather.token"), "{err}");
     }
 
     #[test]

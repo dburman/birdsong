@@ -21,6 +21,9 @@ pub struct PipelineStats {
     store_errors: AtomicU64,
     clips_written: AtomicU64,
     clip_errors: AtomicU64,
+    birdweather_soundscapes: AtomicU64,
+    birdweather_detections: AtomicU64,
+    birdweather_errors: AtomicU64,
     /// Exponentially weighted mean inference time in microseconds; 0 = no sample yet.
     inference_micros_ewma: AtomicU64,
     /// Start time of the newest processed chunk, microseconds since the epoch; 0 = none yet.
@@ -41,6 +44,9 @@ pub struct StatsSnapshot {
     pub store_errors: u64,
     pub clips_written: u64,
     pub clip_errors: u64,
+    pub birdweather_soundscapes: u64,
+    pub birdweather_detections: u64,
+    pub birdweather_errors: u64,
     pub mean_inference_ms: Option<f64>,
     /// Start of the newest processed chunk (audio time).
     pub last_chunk_at: Option<DateTime<Utc>>,
@@ -103,6 +109,16 @@ impl PipelineStats {
         self.clip_errors.fetch_add(1, Ordering::Relaxed);
     }
 
+    pub(crate) fn birdweather_uploaded(&self, detections: u64) {
+        self.birdweather_soundscapes.fetch_add(1, Ordering::Relaxed);
+        self.birdweather_detections
+            .fetch_add(detections, Ordering::Relaxed);
+    }
+
+    pub(crate) fn birdweather_error(&self) {
+        self.birdweather_errors.fetch_add(1, Ordering::Relaxed);
+    }
+
     pub fn snapshot(&self) -> StatsSnapshot {
         let ewma = self.inference_micros_ewma.load(Ordering::Relaxed);
         let last = self.last_chunk_at_micros.load(Ordering::Relaxed);
@@ -117,6 +133,9 @@ impl PipelineStats {
             store_errors: self.store_errors.load(Ordering::Relaxed),
             clips_written: self.clips_written.load(Ordering::Relaxed),
             clip_errors: self.clip_errors.load(Ordering::Relaxed),
+            birdweather_soundscapes: self.birdweather_soundscapes.load(Ordering::Relaxed),
+            birdweather_detections: self.birdweather_detections.load(Ordering::Relaxed),
+            birdweather_errors: self.birdweather_errors.load(Ordering::Relaxed),
             mean_inference_ms: (ewma > 0).then(|| ewma as f64 / 1000.0),
             last_chunk_at: (last != 0)
                 .then(|| DateTime::from_timestamp_micros(last))

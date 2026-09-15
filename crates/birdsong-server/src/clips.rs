@@ -18,6 +18,7 @@ use chrono::{DateTime, TimeDelta, Utc};
 use chrono_tz::Tz;
 use tokio::sync::mpsc::{self, error::TryRecvError};
 
+use crate::birdweather::UploadJob;
 use crate::stats::PipelineStats;
 
 /// Where and how clips are written.
@@ -151,6 +152,8 @@ pub(crate) struct ClipJob {
     pub start_at: DateTime<Utc>,
     pub common_name: String,
     pub confidence: f32,
+    /// Every detection of the window: (scientific name, common name, confidence).
+    pub detections: Vec<(String, String, f32)>,
 }
 
 #[derive(Clone, Debug)]
@@ -168,6 +171,7 @@ pub(crate) async fn clip_task(
     store: Arc<dyn DetectionStore>,
     mut rx: mpsc::Receiver<ClipMsg>,
     stats: Arc<PipelineStats>,
+    uploads: Option<mpsc::Sender<UploadJob>>,
 ) {
     let mut pending: VecDeque<ClipMsg> = VecDeque::new();
     let mut ended: HashSet<Arc<str>> = HashSet::new();
@@ -239,6 +243,8 @@ pub(crate) async fn clip_task(
             settings.timezone,
             settings.format,
         );
+        let upload_samples = uploads.as_ref().map(|_| clip.samples.clone());
+        let clip_start_at = clip.start_at;
         let write_settings = settings.clone();
         let written = tokio::task::spawn_blocking(move || {
             write_clip_files(&write_settings, &relative, &clip.samples)
@@ -248,6 +254,18 @@ pub(crate) async fn clip_task(
             Ok(Ok(info)) => match store.set_clip(&job.ids, Some(&info)).await {
                 Ok(()) => {
                     stats.clip_written();
+                    if let (Some(tx), Some(clip_samples)) = (uploads.as_ref(), upload_samples) {
+                        let upload = UploadJob {
+                            clip_samples,
+                            clip_start_at,
+                            chunk_start_at: job.start_at,
+                            detections: job.detections.clone(),
+                        };
+                        if tx.try_send(upload).is_err() {
+                            stats.birdweather_error();
+                            tracing::warn!("BirdWeather upload queue is full; skipping this clip");
+                        }
+                    }
                     tracing::debug!(clip = %info.clip_path, bytes = info.clip_bytes, "clip saved");
                 }
                 Err(e) => {

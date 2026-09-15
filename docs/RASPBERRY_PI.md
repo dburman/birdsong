@@ -99,6 +99,23 @@ The rolling window for saved audio is under `[retention]`: `clip_max_age_days` (
 Clips are saved as FLAC by default (`storage.clip_format`), about a third the size of WAV with
 identical audio; the size cap counts each clip's audio and spectrogram together.
 
+## Optional: share detections with BirdWeather
+
+[BirdWeather](https://app.birdweather.com) collects detections from BirdNET stations worldwide.
+Create a station in the BirdWeather app, copy its token, and add it to the configuration (or pass
+it as `BIRDSONG__BIRDWEATHER__TOKEN` so it stays out of the file):
+
+```toml
+[birdweather]
+token = "your-station-token"
+```
+
+Uploads need `station.latitude` and `station.longitude`. Every saved clip is sent as a FLAC
+soundscape together with the detections in it, the same way BirdNET-Pi does. Detections hidden by
+the privacy filter have no clip and are never uploaded. Uploads run in the background: if
+BirdWeather is slow or unreachable, clips are skipped for upload rather than delayed, and
+`birdweather_errors` in `/api/v1/health` counts them. The token is shown as `***` in `/api/v1/config`.
+
 ## 5. Start
 
 ```bash

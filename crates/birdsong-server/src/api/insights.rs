@@ -87,6 +87,9 @@ pub async fn stats_recent(
 /// `GET /config` with stream credentials redacted.
 pub async fn config(State(state): State<AppState>) -> ApiResult<Json<Value>> {
     let mut cfg = (*state.config).clone();
+    if cfg.birdweather.enabled() {
+        cfg.birdweather.token = "***".into();
+    }
     for source in &mut cfg.audio.sources {
         if let Some(url) = &source.url {
             source.url = Some(redact_url(url));

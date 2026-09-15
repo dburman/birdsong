@@ -1,0 +1,408 @@
+//! Uploads to BirdWeather (<https://app.birdweather.com>), matching BirdNET-Pi: for every saved
+//! clip, POST the audio as a FLAC soundscape, then POST each detection of that window pointing at
+//! the soundscape id.
+//!
+//! ```text
+//! POST {api}/stations/{token}/soundscapes?timestamp=<RFC 3339>&type=flac   (FLAC body) -> {"success":true,"soundscape":{"id":N}}
+//! POST {api}/stations/{token}/detections                                    (JSON body)
+//! ```
+
+use std::fmt;
+use std::sync::Arc;
+use std::time::Duration;
+
+use birdsong_core::SAMPLE_RATE_HZ;
+use chrono::{DateTime, SecondsFormat, Utc};
+use chrono_tz::Tz;
+use serde::{Deserialize, Serialize};
+use tokio::sync::mpsc;
+
+use crate::stats::PipelineStats;
+
+/// BirdWeather's identifier for BirdNET V2.4 detections.
+pub const ALGORITHM_V24: &str = "2p4";
+
+/// Why an upload did not succeed.
+#[derive(Debug)]
+pub enum UploadError {
+    /// Connection, TLS or timeout problem.
+    Transport(String),
+    /// A non-2xx response.
+    Status { status: u16, body: String },
+    /// A 2xx response whose body was not the expected JSON, or `success: false`.
+    Rejected(String),
+    /// The clip could not be encoded as FLAC.
+    Encode(String),
+}
+
+impl fmt::Display for UploadError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::Transport(m) => write!(f, "network error: {m}"),
+            Self::Status { status, body } => write!(f, "HTTP {status}: {body}"),
+            Self::Rejected(m) => write!(f, "rejected: {m}"),
+            Self::Encode(m) => write!(f, "FLAC encoding: {m}"),
+        }
+    }
+}
+
+impl std::error::Error for UploadError {}
+
+impl UploadError {
+    /// Worth trying again: network trouble, rate limiting, or a server-side error.
+    pub fn is_transient(&self) -> bool {
+        match self {
+            Self::Transport(_) => true,
+            Self::Status { status, .. } => *status == 429 || *status >= 500,
+            _ => false,
+        }
+    }
+}
+
+/// One detection as BirdWeather expects it (same fields as BirdNET-Pi sends).
+#[derive(Clone, Debug, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct DetectionUpload {
+    /// Start of the 3 s window, station time zone, RFC 3339 with milliseconds.
+    pub timestamp: String,
+    pub lat: f64,
+    pub lon: f64,
+    pub soundscape_id: i64,
+    /// Seconds from the start of the soundscape to the start of the detection window.
+    pub soundscape_start_time: f64,
+    pub soundscape_end_time: f64,
+    pub common_name: String,
+    pub scientific_name: String,
+    pub algorithm: String,
+    pub confidence: f32,
+}
+
+#[derive(Deserialize)]
+struct SoundscapeResponse {
+    #[serde(default)]
+    success: bool,
+    #[serde(default)]
+    message: Option<String>,
+    soundscape: Option<SoundscapeId>,
+}
+
+#[derive(Deserialize)]
+struct SoundscapeId {
+    id: i64,
+}
+
+/// Percent-encode a query value (everything except unreserved characters).
+pub fn encode_query_value(value: &str) -> String {
+    let mut out = String::with_capacity(value.len());
+    for b in value.bytes() {
+        if b.is_ascii_alphanumeric() || matches!(b, b'-' | b'.' | b'_' | b'~') {
+            out.push(b as char);
+        } else {
+            out.push_str(&format!("%{b:02X}"));
+        }
+    }
+    out
+}
+
+/// RFC 3339 in the station time zone with milliseconds, e.g. `2026-05-15T06:00:00.000-04:00`.
+pub fn station_timestamp(at: DateTime<Utc>, tz: Tz) -> String {
+    at.with_timezone(&tz)
+        .to_rfc3339_opts(SecondsFormat::Millis, false)
+}
+
+/// Blocking HTTP client for the two BirdWeather endpoints.
+pub struct BirdWeatherClient {
+    agent: ureq::Agent,
+    api_url: String,
+    token: String,
+    /// Waits before the second and third attempt of a transient failure.
+    pub retry_delays: Vec<Duration>,
+}
+
+impl BirdWeatherClient {
+    pub fn new(api_url: &str, token: &str) -> Self {
+        let agent: ureq::Agent = ureq::Agent::config_builder()
+            .timeout_global(Some(Duration::from_secs(45)))
+            .http_status_as_error(false)
+            .user_agent(concat!("birdsong/", env!("CARGO_PKG_VERSION")))
+            .build()
+            .into();
+        Self {
+            agent,
+            api_url: api_url.trim_end_matches('/').to_string(),
+            token: token.trim().to_string(),
+            retry_delays: vec![Duration::from_secs(2), Duration::from_secs(10)],
+        }
+    }
+
+    fn station_url(&self, rest: &str) -> String {
+        format!("{}/stations/{}/{rest}", self.api_url, self.token)
+    }
+
+    fn with_retries<T>(
+        &self,
+        what: &str,
+        mut call: impl FnMut() -> Result<T, UploadError>,
+    ) -> Result<T, UploadError> {
+        let mut delays = self.retry_delays.iter();
+        loop {
+            match call() {
+                Err(e) if e.is_transient() => match delays.next() {
+                    Some(delay) => {
+                        tracing::warn!(error = %e, retry_in = ?delay, "BirdWeather {what} failed; retrying");
+                        std::thread::sleep(*delay);
+                    }
+                    None => return Err(e),
+                },
+                other => return other,
+            }
+        }
+    }
+
+    fn read_response(
+        mut response: ureq::http::Response<ureq::Body>,
+    ) -> Result<String, UploadError> {
+        let status = response.status().as_u16();
+        let body = response
+            .body_mut()
+            .with_config()
+            .limit(64 * 1024)
+            .read_to_string()
+            .unwrap_or_default();
+        if (200..300).contains(&status) {
+            Ok(body)
+        } else {
+            Err(UploadError::Status {
+                status,
+                body: body.chars().take(300).collect(),
+            })
+        }
+    }
+
+    /// Upload FLAC audio; returns the soundscape id.
+    pub fn upload_soundscape(&self, flac: &[u8], timestamp: &str) -> Result<i64, UploadError> {
+        let url = self.station_url(&format!(
+            "soundscapes?timestamp={}&type=flac",
+            encode_query_value(timestamp)
+        ));
+        self.with_retries("soundscape upload", || {
+            let response = self
+                .agent
+                .post(&url)
+                .header("Content-Type", "audio/flac")
+                .send(flac)
+                .map_err(|e| UploadError::Transport(e.to_string()))?;
+            let body = Self::read_response(response)?;
+            let parsed: SoundscapeResponse = serde_json::from_str(&body)
+                .map_err(|e| UploadError::Rejected(format!("unexpected response {body:?}: {e}")))?;
+            match (parsed.success, parsed.soundscape) {
+                (true, Some(s)) => Ok(s.id),
+                _ => Err(UploadError::Rejected(
+                    parsed
+                        .message
+                        .unwrap_or_else(|| format!("unexpected response {body:?}")),
+                )),
+            }
+        })
+    }
+
+    /// Post one detection that refers to an uploaded soundscape.
+    pub fn post_detection(&self, detection: &DetectionUpload) -> Result<(), UploadError> {
+        let url = self.station_url("detections");
+        self.with_retries("detection upload", || {
+            let response = self
+                .agent
+                .post(&url)
+                .send_json(detection)
+                .map_err(|e| UploadError::Transport(e.to_string()))?;
+            Self::read_response(response).map(|_| ())
+        })
+    }
+}
+
+/// Everything needed to upload one saved clip and its detections.
+#[derive(Clone, Debug)]
+pub struct UploadJob {
+    pub clip_samples: Vec<f32>,
+    pub clip_start_at: DateTime<Utc>,
+    pub chunk_start_at: DateTime<Utc>,
+    /// (scientific name, common name, confidence) for every detection of the window.
+    pub detections: Vec<(String, String, f32)>,
+}
+
+/// Station details sent with each detection.
+#[derive(Clone, Copy, Debug)]
+pub struct Station {
+    pub latitude: f64,
+    pub longitude: f64,
+    pub timezone: Tz,
+}
+
+/// Outcome of uploading one window.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct WindowResult {
+    pub detections_posted: usize,
+    /// Detections BirdWeather refused with 422, typically species it does not accept.
+    pub detections_refused: usize,
+}
+
+/// Upload one clip as a soundscape, then its detections. Blocking.
+pub fn upload_window(
+    client: &BirdWeatherClient,
+    station: Station,
+    job: &UploadJob,
+) -> Result<WindowResult, UploadError> {
+    let flac = birdsong_audio::flac::encode_flac(&job.clip_samples, SAMPLE_RATE_HZ)
+        .map_err(|e| UploadError::Encode(e.to_string()))?;
+    let soundscape_id = client.upload_soundscape(
+        &flac,
+        &station_timestamp(job.clip_start_at, station.timezone),
+    )?;
+
+    let clip_seconds = job.clip_samples.len() as f64 / f64::from(SAMPLE_RATE_HZ);
+    let start = ((job.chunk_start_at - job.clip_start_at).num_milliseconds() as f64 / 1000.0)
+        .clamp(0.0, clip_seconds);
+    let end = (start + f64::from(birdsong_core::CHUNK_SECONDS)).min(clip_seconds);
+
+    let mut result = WindowResult::default();
+    for (scientific, common, confidence) in &job.detections {
+        let upload = DetectionUpload {
+            timestamp: station_timestamp(job.chunk_start_at, station.timezone),
+            lat: station.latitude,
+            lon: station.longitude,
+            soundscape_id,
+            soundscape_start_time: start,
+            soundscape_end_time: end,
+            common_name: common.clone(),
+            scientific_name: scientific.clone(),
+            algorithm: ALGORITHM_V24.into(),
+            confidence: *confidence,
+        };
+        match client.post_detection(&upload) {
+            Ok(()) => result.detections_posted += 1,
+            Err(UploadError::Status { status: 422, body }) => {
+                tracing::debug!(species = %scientific, %body, "BirdWeather refused the detection");
+                result.detections_refused += 1;
+            }
+            Err(e) => return Err(e),
+        }
+    }
+    Ok(result)
+}
+
+/// Background uploader. Jobs arrive from the clip writer through a bounded channel; the clip
+/// writer never waits for the network.
+pub(crate) async fn upload_task(
+    client: Arc<BirdWeatherClient>,
+    station: Station,
+    mut jobs: mpsc::Receiver<UploadJob>,
+    stats: Arc<PipelineStats>,
+) {
+    while let Some(job) = jobs.recv().await {
+        let client = Arc::clone(&client);
+        let outcome =
+            tokio::task::spawn_blocking(move || upload_window(&client, station, &job)).await;
+        match outcome {
+            Ok(Ok(result)) => {
+                stats.birdweather_uploaded(result.detections_posted as u64);
+                tracing::info!(
+                    posted = result.detections_posted,
+                    refused = result.detections_refused,
+                    "uploaded to BirdWeather"
+                );
+            }
+            Ok(Err(e)) => {
+                stats.birdweather_error();
+                tracing::warn!(error = %e, "BirdWeather upload failed");
+            }
+            Err(e) => {
+                stats.birdweather_error();
+                tracing::error!(error = %e, "BirdWeather upload task panicked");
+            }
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use chrono::TimeZone;
+
+    #[test]
+    fn query_values_are_percent_encoded() {
+        assert_eq!(
+            encode_query_value("2026-05-15T06:00:00.000-04:00"),
+            "2026-05-15T06%3A00%3A00.000-04%3A00"
+        );
+        assert_eq!(encode_query_value("+02:00 x"), "%2B02%3A00%20x");
+    }
+
+    #[test]
+    fn timestamps_use_the_station_time_zone() {
+        let at = Utc.with_ymd_and_hms(2026, 5, 15, 10, 0, 0).unwrap();
+        assert_eq!(
+            station_timestamp(at, chrono_tz::America::New_York),
+            "2026-05-15T06:00:00.000-04:00"
+        );
+        assert_eq!(
+            station_timestamp(at, chrono_tz::UTC),
+            "2026-05-15T10:00:00.000+00:00"
+        );
+    }
+
+    #[test]
+    fn detection_json_matches_birdnet_pi_field_names() {
+        let upload = DetectionUpload {
+            timestamp: "2026-05-15T06:00:00.000-04:00".into(),
+            lat: 42.36,
+            lon: -71.06,
+            soundscape_id: 42,
+            soundscape_start_time: 1.5,
+            soundscape_end_time: 4.5,
+            common_name: "Black-capped Chickadee".into(),
+            scientific_name: "Poecile atricapillus".into(),
+            algorithm: ALGORITHM_V24.into(),
+            confidence: 0.75,
+        };
+        let v = serde_json::to_value(&upload).unwrap();
+        let mut keys: Vec<&str> = v.as_object().unwrap().keys().map(String::as_str).collect();
+        keys.sort_unstable();
+        assert_eq!(
+            keys,
+            [
+                "algorithm",
+                "commonName",
+                "confidence",
+                "lat",
+                "lon",
+                "scientificName",
+                "soundscapeEndTime",
+                "soundscapeId",
+                "soundscapeStartTime",
+                "timestamp"
+            ]
+        );
+        assert_eq!(v["algorithm"], "2p4");
+    }
+
+    #[test]
+    fn transient_errors() {
+        assert!(UploadError::Transport("x".into()).is_transient());
+        assert!(UploadError::Status {
+            status: 503,
+            body: String::new()
+        }
+        .is_transient());
+        assert!(UploadError::Status {
+            status: 429,
+            body: String::new()
+        }
+        .is_transient());
+        assert!(!UploadError::Status {
+            status: 422,
+            body: String::new()
+        }
+        .is_transient());
+        assert!(!UploadError::Rejected("no".into()).is_transient());
+    }
+}

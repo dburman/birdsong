@@ -3,6 +3,7 @@
 
 pub mod analyze;
 pub mod api;
+pub mod birdweather;
 pub mod clips;
 pub mod healthcheck;
 pub mod pipeline;

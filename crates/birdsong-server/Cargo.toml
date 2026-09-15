@@ -35,6 +35,7 @@ axum.workspace = true
 tower.workspace = true
 tower-http.workspace = true
 futures-util.workspace = true
+ureq.workspace = true
 
 [dev-dependencies]
 tempfile.workspace = true

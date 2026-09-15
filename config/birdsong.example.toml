@@ -52,6 +52,9 @@ keep_best_per_species_per_day = 1   # exempt from purging (0 = none)
 detection_rows_max_age_days = 0     # 0 = keep detection rows forever
 purge_interval_minutes = 30
 
+[birdweather]
+token = ""                      # BirdWeather station token; empty disables uploads (needs station latitude/longitude)
+
 [server]
 bind = "0.0.0.0:8080"
 cors_allow_origins = ["*"]

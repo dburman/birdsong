@@ -285,3 +285,28 @@ One entry per non-obvious decision. Newest at the bottom. Format: Decision / Why
   accepts only FLAC soundscapes, so the same encoder serves both. Current browsers play FLAC.
 - **Rejected.** Opus or MP3 (lossy, and BirdNET-Pi keeps full-quality audio); calling ffmpeg to
   encode (a process per clip, and ffmpeg is otherwise only needed for capture).
+
+## 21. 2026-09-15 — BirdWeather uploads
+
+- **Decision.**
+  - Follow BirdNET-Pi's protocol: POST the clip as FLAC to
+    `/stations/{token}/soundscapes?timestamp=…&type=flac` with `Content-Type: audio/flac`, then POST
+    one JSON body per detection (`timestamp`, `lat`, `lon`, `soundscapeId`, `soundscapeStartTime`,
+    `soundscapeEndTime` in seconds, `commonName`, `scientificName`, `algorithm = "2p4"`,
+    `confidence`). `type=flac` is what BirdNET-Go sends; including both conventions is harmless.
+  - The soundscape is the saved clip (6 s by default, centred on the window), so the start and end
+    offsets point at the 3 s detection window inside it. Timestamps are RFC 3339 with milliseconds
+    in the station time zone.
+  - HTTP uses `ureq` with rustls on the `ring` provider and bundled Mozilla roots. `reqwest` 0.13
+    selects `aws-lc-rs` (an FFI binding to AWS-LC) for rustls, which the policy (#1, enforced by
+    `deny.toml`) does not allow without approval.
+  - Uploads run in their own task, fed with `try_send` from the clip writer: a slow or unreachable
+    BirdWeather never delays clips. Transport errors, 429 and 5xx are retried after 2 s and 10 s;
+    `success: false` is not retried; 422 on a detection (a species BirdWeather refuses, such as
+    `Dog`) is logged at debug level and does not count as a failure.
+  - The token only appears in request URLs, never in logs, and `/api/v1/config` redacts it.
+- **Why.** Matches the replicated project, keeps capture and storage independent of the network,
+  and stays within the dependency policy.
+- **Rejected.** Uploading the whole 3 s window as a separate recording (BirdNET-Pi uploads the file
+  it analysed; the saved clip is our equivalent and is already on disk); location fuzzing as in
+  BirdNET-Go (BirdNET-Pi sends the configured coordinates; users can configure coarser ones).

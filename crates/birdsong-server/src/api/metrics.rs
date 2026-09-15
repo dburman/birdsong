@@ -130,6 +130,27 @@ pub async fn metrics(State(state): State<AppState>) -> ApiResult<Response> {
     }
     metric(
         &mut out,
+        "birdsong_birdweather_soundscapes_total",
+        "counter",
+        "Clips uploaded to BirdWeather.",
+        s.birdweather_soundscapes,
+    );
+    metric(
+        &mut out,
+        "birdsong_birdweather_detections_total",
+        "counter",
+        "Detections accepted by BirdWeather.",
+        s.birdweather_detections,
+    );
+    metric(
+        &mut out,
+        "birdsong_birdweather_errors_total",
+        "counter",
+        "BirdWeather uploads that failed or were skipped.",
+        s.birdweather_errors,
+    );
+    metric(
+        &mut out,
         "birdsong_clip_bytes",
         "gauge",
         "Disk used by saved clips and spectrograms.",

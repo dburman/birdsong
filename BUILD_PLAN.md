@@ -946,7 +946,7 @@ a few minutes outdoors.
 - ~~FLAC clips (`flacenc`, pure Rust) to cut disk use ~50 %.~~ **Done 2026-09-15**: `storage.clip_format = "flac"` is the default (DECISIONS #20).
 - Webhook / ntfy / MQTT notifications on new species or configurable species.
 - Home Assistant MQTT discovery.
-- BirdWeather upload (BirdNET-Pi feature).
+- ~~BirdWeather upload (BirdNET-Pi feature).~~ **Done 2026-09-15**: `[birdweather] token`, FLAC soundscapes plus detections (DECISIONS #21).
 - Localised common names (BirdNET-Analyzer ships per-language label files).
 - Live audio stream + live spectrogram over WebSocket.
 - Species thumbnails via Wikipedia/Wikimedia lookup (cached on disk).

@@ -48,6 +48,9 @@ tower-http = { version = "0.7", features = ["cors", "compression-gzip", "trace",
 futures-util = "0.3"
 http-body-util = "0.1"
 
+# outbound HTTPS (BirdWeather): rustls with the ring provider, bundled Mozilla roots
+ureq = { version = "3.4", features = ["json"] }
+
 # storage
 sqlx = { version = "0.9", default-features = false, features = ["runtime-tokio", "sqlite", "sqlite-bundled", "migrate", "macros"] }
 
