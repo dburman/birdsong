@@ -1,9 +1,11 @@
 [package]
 name = "birdsong-model"
-version = "0.1.0"
+description = "Classifier inference: BirdNET V2.4 mel frontend + tract-onnx backend"
+version.workspace = true
 edition.workspace = true
 license.workspace = true
 rust-version.workspace = true
+repository.workspace = true
 
 [dependencies]
 anyhow.workspace = true

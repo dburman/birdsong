@@ -1,0 +1,19 @@
+[package]
+name = "birdsong-server"
+description = "The birdsong binary: pipeline, HTTP API and web UI"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+repository.workspace = true
+
+[[bin]]
+name = "birdsong"
+path = "src/main.rs"
+
+[dependencies]
+birdsong-core.workspace = true
+anyhow.workspace = true
+clap.workspace = true
+tracing.workspace = true
+tracing-subscriber.workspace = true

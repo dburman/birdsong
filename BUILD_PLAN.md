@@ -534,6 +534,11 @@ recorded; DECISIONS.md has the "inference backend" entry.
 
 ### Step 1 — Workspace scaffolding
 
+> **STATUS: DONE (2026-09-15).** Five crates compile; `birdsong-core` has `Config` (TOML + env),
+> validation, `Detection`, constants, `week_of_year`, `local_date_and_hour`, `sanitize_name`,
+> with 10 tests. `birdsong check-config --config <file>` validates and prints the effective config.
+> CI: fmt, clippy, tests on x86_64 plus an aarch64 cross build. `Makefile` targets: check, test, run, docker-build.
+
 **Objective.** Empty but compiling workspace with tooling.
 
 **Deliverables.**

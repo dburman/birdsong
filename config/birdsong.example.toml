@@ -1,0 +1,53 @@
+# Birdsong configuration. Copy to config/birdsong.toml and edit.
+# Every key can be overridden with BIRDSONG__SECTION__KEY, e.g. BIRDSONG__DETECTION__MIN_CONFIDENCE=0.8
+
+[station]
+name = "Backyard"
+latitude = 42.36            # set both to 0 to disable the location filter
+longitude = -71.06
+timezone = "America/New_York"   # IANA name; used for daily charts and clip folder dates
+
+# One or more audio sources; each becomes an independent capture task.
+[[audio.sources]]
+id = "mic0"
+kind = "alsa"               # "alsa" | "rtsp" | "file"
+device = "hw:1,0"           # find yours with `arecord -l` (ignored for rtsp/file)
+# url = "rtsp://user:pass@camera/stream"   # for kind = "rtsp"
+# path = "/data/test.wav"                  # for kind = "file" (replays the file, for testing)
+gain_db = 0.0
+
+[detection]
+min_confidence = 0.7            # BirdNET-Pi CONFIDENCE
+sensitivity = 1.25              # BirdNET-Pi SENSITIVITY, 0.5..=1.5
+overlap_seconds = 0.0           # BirdNET-Pi OVERLAP, 0.0..<3.0
+species_filter_threshold = 0.03 # location filter threshold (BirdNET SF_THRESH)
+top_n_per_chunk = 3             # classes per 3 s window that may become detections
+include_species = []            # scientific names always allowed, e.g. ["Cardinalis cardinalis"]
+exclude_species = []            # scientific names never reported
+privacy_filter = true           # BirdNET-Pi human-voice mask
+privacy_threshold = 0.0         # percent 0..100; higher is stricter
+
+[model]
+dir = "/models"
+classifier = "birdnet-v2.4-headless.onnx"   # see docs/MODEL.md
+labels = "labels/en_us.txt"
+meta_model = "meta-model.onnx"              # location/week filter; remove to disable
+# species_list = "/config/species.txt"      # precomputed allowed list; overrides meta_model
+threads = 0                                  # 0 = CPUs - 1
+
+[storage]
+data_dir = "/data"
+clip_seconds = 6.0              # BirdNET-Pi EXTRACTION_LENGTH; centred on the 3 s window
+clip_format = "wav"
+spectrograms = true
+
+[retention]
+clip_max_age_days = 14              # rolling window for saved clips
+clip_max_total_mb = 4096            # delete oldest clips beyond this (0 = unlimited)
+keep_best_per_species_per_day = 1   # exempt from purging (0 = none)
+detection_rows_max_age_days = 0     # 0 = keep detection rows forever
+purge_interval_minutes = 30
+
+[server]
+bind = "0.0.0.0:8080"
+cors_allow_origins = ["*"]

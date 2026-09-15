@@ -1,19 +1,44 @@
 [workspace]
 resolver = "2"
-members = ["crates/birdsong-model"]
+members = [
+    "crates/birdsong-core",
+    "crates/birdsong-audio",
+    "crates/birdsong-model",
+    "crates/birdsong-store",
+    "crates/birdsong-server",
+]
 
 [workspace.package]
+version = "0.1.0"
 edition = "2021"
 license = "MIT"
 rust-version = "1.85"
+repository = "https://github.com/dburman/birdsong"
 
 [workspace.dependencies]
+# internal
+birdsong-core = { path = "crates/birdsong-core" }
+birdsong-audio = { path = "crates/birdsong-audio" }
+birdsong-model = { path = "crates/birdsong-model" }
+birdsong-store = { path = "crates/birdsong-store" }
+
+# general
 anyhow = "1"
-tract-onnx = "0.23"
-hound = "3.5"
+thiserror = "2"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
+toml = "1"
+config = { version = "0.15", default-features = false, features = ["toml"] }
+chrono = { version = "0.4", features = ["serde"] }
+chrono-tz = { version = "0.10", features = ["serde"] }
+clap = { version = "4", features = ["derive"] }
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+
+# audio / dsp / inference
+hound = "3.5"
 rustfft = "6"
+tract-onnx = "0.23"
 
 [profile.release]
 opt-level = 3
