@@ -160,6 +160,24 @@ Memory is bounded by design; nothing grows with uptime or with the number of det
 With two sources the container used about 230 MiB in testing, so a 1 GB Pi is enough and 2 GB
 leaves room for the OS and Docker.
 
+## Load test
+
+Measured on the development machine with the linux/arm64 image, not on a Pi: two real-time
+sources replaying a 2-minute recording with `detection.overlap_seconds = 1.5` (1.33 windows per
+second in total), sampled after 60 seconds. The second run limits the container to 10 % of one
+core, which is far slower than a Raspberry Pi 4 is expected to be, to show what happens under
+overload.
+
+| Container CPU limit | Windows analysed | Windows dropped | Mean inference per window | Memory |
+|---------------------|-----------------:|----------------:|--------------------------:|-------:|
+| 1 core | 78 | 0 | 45 ms | 241 MiB |
+| 10 % of a core | 12 | 40 | 3 285 ms | 228 MiB |
+
+When inference cannot keep up, the oldest queued windows are dropped (counted in
+`chunks_dropped`, and their neighbours are blanked by the privacy filter), the newest audio is
+still analysed, and memory stays flat. Measure your own Pi with the health endpoint before
+enabling overlap or a second source.
+
 ## Troubleshooting
 
 | Symptom | Likely cause and fix |
