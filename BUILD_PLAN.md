@@ -676,6 +676,18 @@ Jan 1, Jan 7, Jan 8, Jan 29, Feb 1, Dec 31.
 
 ### Step 5 — Pipeline assembly (the `run` command, headless)
 
+> **STATUS: DONE (2026-09-15).** `birdsong-server` is now a library plus the `birdsong` binary.
+> `Pipeline` (`from_config` builds ffmpeg sources; `with_sources` for tests) runs one task per
+> source (capture + `Chunker`), a shared `ChunkQueue` of 4 chunks (drop-oldest for live sources,
+> wait for fast file decoding; gap/end markers never dropped), one `inference` thread (model,
+> week-cached species filter, per-source `NeighbourMask`, bypassed when the privacy filter is
+> off), and a storage task (insert, one `detection species="…" conf=0.87 source=… id=…` log line,
+> `broadcast::Sender<Detection>` with ids). `PipelineStats` counts chunks processed/dropped/masked,
+> gaps, detections, errors, EWMA inference ms and last chunk time. `birdsong run --config
+> [--exit-on-eof] [--fast-files]` handles SIGINT/SIGTERM and drains queued chunks before exiting;
+> logs go to stderr. A fatal source error (e.g. ffmpeg missing) stops the run with a non-zero exit.
+> Tests: 5 unit, 3 pipeline integration, 1 CLI end to end. See DECISIONS #12.
+
 **Objective.** One binary that captures, detects, stores. No HTTP yet.
 
 **Deliverables** in `birdsong-server` (binary `birdsong`, use `clap`):

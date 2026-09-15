@@ -174,8 +174,18 @@ name = "birdsong-server"
 version = "0.1.0"
 dependencies = [
  "anyhow",
+ "birdsong-audio",
  "birdsong-core",
+ "birdsong-model",
+ "birdsong-store",
+ "chrono",
+ "chrono-tz",
  "clap",
+ "serde",
+ "serde_json",
+ "tempfile",
+ "tokio",
+ "tokio-util",
  "tracing",
  "tracing-subscriber",
 ]

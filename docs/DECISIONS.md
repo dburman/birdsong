@@ -128,3 +128,23 @@ One entry per non-obvious decision. Newest at the bottom. Format: Decision / Why
 - **Rejected.** `rusqlite` with `spawn_blocking` (works, but more glue); integer epoch timestamps
   (less readable in database tools, no real gain at this scale); compile-time checked `query!`
   macros (need a live database or offline metadata in CI).
+
+## 12. 2026-09-15 — Pipeline shape, backpressure and shutdown
+
+- **Decision.**
+  - A `Pipeline` struct (`from_config`/`with_sources`, then `run(cancel)`) instead of a bare
+    `run_pipeline` function, so the API (Step 8) can take `stats()` and `subscribe()` handles
+    before the pipeline starts.
+  - One inference thread for all sources. The queue holds 4 chunks; live sources drop the oldest
+    queued chunk when full (counted and logged), file sources decoded with `--fast-files` wait
+    instead. Control markers (gap, end of stream) bypass the capacity and are never dropped.
+  - Shutdown drains: on SIGTERM sources stop, already queued chunks are still analysed and stored,
+    then the process exits. A source returning an error stops everything and exits non-zero;
+    a file source ending normally keeps the process (and later the API) up unless `--exit-on-eof`.
+  - Logs go to stderr so `analyze --json` (Step 6) can own stdout.
+- **Why.** Dropping old audio is the only way a slow Pi keeps detections current; waiting is the
+  only way offline analysis stays complete. Draining at most 4 chunks costs about a second.
+- **Known limitation.** If a *dropped* chunk contained human speech, its neighbours are not
+  masked. Drops only happen when inference is badly overloaded; Step 11 revisits it.
+- **Rejected.** A tokio `mpsc` channel (cannot drop oldest); one inference thread per source
+  (doubles model memory, no gain on a 4-core Pi running a single-threaded model).

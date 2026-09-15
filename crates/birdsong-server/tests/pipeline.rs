@@ -1,0 +1,201 @@
+//! Pipeline end to end with real models. Skips when `models/` is absent.
+#![forbid(unsafe_code)]
+
+use std::path::{Path, PathBuf};
+use std::sync::Arc;
+use std::time::{Duration, Instant};
+
+use birdsong_audio::{FfmpegOptions, FfmpegSource, Pacing, WavFileSource};
+use birdsong_core::config::{AudioSourceConfig, AudioSourceKind};
+use birdsong_core::Config;
+use birdsong_model::ModelBundle;
+use birdsong_server::{Backpressure, Pipeline, PipelineOptions, SourceSpec};
+use birdsong_store::{DetectionQuery, DetectionStore, SqliteStore, StoreOptions};
+use chrono::{TimeZone, Utc};
+use tokio_util::sync::CancellationToken;
+
+fn repo_root() -> PathBuf {
+    PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../..")
+}
+
+fn models_present() -> bool {
+    repo_root()
+        .join("models/birdnet-v2.4-headless.onnx")
+        .exists()
+}
+
+fn fixture() -> PathBuf {
+    repo_root().join("tools/fixtures/soundscape_15s.wav")
+}
+
+fn config(data_dir: &Path) -> Config {
+    Config::from_toml(&format!(
+        r#"
+[station]
+latitude = 42.36
+longitude = -71.06
+timezone = "America/New_York"
+[[audio.sources]]
+id = "file0"
+kind = "file"
+path = {fixture:?}
+[model]
+dir = {models:?}
+[storage]
+data_dir = {data:?}
+"#,
+        fixture = fixture().display().to_string(),
+        models = repo_root().join("models").display().to_string(),
+        data = data_dir.display().to_string(),
+    ))
+    .unwrap()
+}
+
+async fn setup(dir: &Path) -> (Config, ModelBundle, SqliteStore) {
+    let cfg = config(dir);
+    let bundle = ModelBundle::load(&cfg).unwrap();
+    let store = SqliteStore::open(
+        &cfg.storage.database_path(),
+        StoreOptions::from_config(&cfg),
+    )
+    .await
+    .unwrap();
+    (cfg, bundle, store)
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn fixture_detections_are_stored_and_broadcast() {
+    if !models_present() {
+        eprintln!("skipping: models not present");
+        return;
+    }
+    let dir = tempfile::tempdir().unwrap();
+    let (cfg, bundle, store) = setup(dir.path()).await;
+    let start = Utc.with_ymd_and_hms(2026, 5, 15, 10, 0, 0).unwrap();
+    let source = WavFileSource::new("file0", fixture(), Pacing::Fast { start_at: start });
+    let pipeline = Pipeline::with_sources(
+        cfg,
+        bundle,
+        Arc::new(store.clone()),
+        vec![SourceSpec {
+            source: Box::new(source),
+            backpressure: Backpressure::Wait,
+        }],
+        PipelineOptions {
+            exit_on_eof: true,
+            fast_files: true,
+        },
+    );
+    let mut rx = pipeline.subscribe();
+    let summary = tokio::time::timeout(
+        Duration::from_secs(60),
+        pipeline.run(CancellationToken::new()),
+    )
+    .await
+    .expect("pipeline finished")
+    .expect("pipeline ok");
+
+    assert_eq!(summary.chunks_processed, 5, "{summary:?}");
+    assert_eq!(summary.chunks_dropped, 0, "Wait backpressure never drops");
+    assert!(summary.mean_inference_ms.is_some());
+
+    let rows = store
+        .list(&DetectionQuery {
+            species: Some("Poecile atricapillus".into()),
+            ..Default::default()
+        })
+        .await
+        .unwrap();
+    assert!(
+        !rows.is_empty(),
+        "chickadee expected in the fixture; summary {summary:?}"
+    );
+    assert_eq!(
+        rows.last().unwrap().detected_at,
+        start,
+        "first chunk starts at the source's start time"
+    );
+    assert_eq!(
+        summary.detections as usize,
+        store.list(&DetectionQuery::default()).await.unwrap().len()
+    );
+
+    let first = rx.try_recv().expect("broadcast of stored detection");
+    assert!(first.id.is_some());
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn cancellation_stops_a_live_source_promptly() {
+    if !models_present() {
+        return;
+    }
+    let dir = tempfile::tempdir().unwrap();
+    let (cfg, bundle, store) = setup(dir.path()).await;
+    let source = WavFileSource::new("live", fixture(), Pacing::Realtime);
+    let pipeline = Pipeline::with_sources(
+        cfg,
+        bundle,
+        Arc::new(store),
+        vec![SourceSpec {
+            source: Box::new(source),
+            backpressure: Backpressure::DropOldest,
+        }],
+        PipelineOptions::default(),
+    );
+    let cancel = CancellationToken::new();
+    let started = Instant::now();
+    let handle = tokio::spawn(pipeline.run(cancel.clone()));
+    tokio::time::sleep(Duration::from_millis(3_500)).await; // at least one chunk captured
+    cancel.cancel();
+    let summary = tokio::time::timeout(Duration::from_secs(5), handle)
+        .await
+        .expect("stopped")
+        .unwrap()
+        .unwrap();
+    assert!(started.elapsed() < Duration::from_secs(9));
+    assert!(summary.chunks_processed >= 1, "{summary:?}");
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn fatal_source_error_fails_the_run() {
+    if !models_present() {
+        return;
+    }
+    let dir = tempfile::tempdir().unwrap();
+    let (cfg, bundle, store) = setup(dir.path()).await;
+    let src = AudioSourceConfig {
+        id: "mic0".into(),
+        kind: AudioSourceKind::Alsa,
+        device: Some("hw:9,0".into()),
+        url: None,
+        path: None,
+        gain_db: 0.0,
+    };
+    let opts = FfmpegOptions {
+        ffmpeg_path: "/nonexistent/ffmpeg".into(),
+        ..FfmpegOptions::default()
+    };
+    let source = FfmpegSource::new(src, opts).unwrap();
+    let pipeline = Pipeline::with_sources(
+        cfg,
+        bundle,
+        Arc::new(store),
+        vec![SourceSpec {
+            source: Box::new(source),
+            backpressure: Backpressure::DropOldest,
+        }],
+        PipelineOptions::default(),
+    );
+    let err = tokio::time::timeout(
+        Duration::from_secs(10),
+        pipeline.run(CancellationToken::new()),
+    )
+    .await
+    .expect("returned")
+    .unwrap_err();
+    let text = format!("{err:#}");
+    assert!(
+        text.contains("ffmpeg not found") && text.contains("mic0"),
+        "{text}"
+    );
+}
