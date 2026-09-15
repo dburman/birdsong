@@ -34,4 +34,7 @@ pub trait DetectionStore: Send + Sync {
         &self,
         since: Option<DateTime<Utc>>,
     ) -> Result<Vec<SpeciesSummary>, StoreError>;
+
+    /// Disk used by all distinct clip files (audio plus spectrogram).
+    async fn total_clip_bytes(&self) -> Result<u64, StoreError>;
 }

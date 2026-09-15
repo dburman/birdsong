@@ -246,6 +246,7 @@ name = "birdsong-server"
 version = "0.1.0"
 dependencies = [
  "anyhow",
+ "async-trait",
  "axum",
  "birdsong-audio",
  "birdsong-core",

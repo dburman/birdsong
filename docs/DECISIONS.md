@@ -145,7 +145,7 @@ One entry per non-obvious decision. Newest at the bottom. Format: Decision / Why
 - **Why.** Dropping old audio is the only way a slow Pi keeps detections current; waiting is the
   only way offline analysis stays complete. Draining at most 4 chunks costs about a second.
 - **Known limitation.** If a *dropped* chunk contained human speech, its neighbours are not
-  masked. Drops only happen when inference is badly overloaded; Step 11 revisits it.
+  masked. Drops only happen when inference is badly overloaded; Step 11 revisits it. Resolved by #19.
 - **Rejected.** A tokio `mpsc` channel (cannot drop oldest); one inference thread per source
   (doubles model memory, no gain on a 4-core Pi running a single-threaded model).
 
@@ -253,3 +253,22 @@ One entry per non-obvious decision. Newest at the bottom. Format: Decision / Why
 - **Rejected.** Baking models into the image (licence, 80 MB, and every model change rebuilds the
   image); publishing converted models as release assets (redistribution the owner has not
   decided on); `cargo-chef` (BuildKit cache mounts do the same job without another tool).
+
+## 19. 2026-09-15 — Observability and hardening choices
+
+- **Decision.**
+  - `/metrics` is rendered by hand from `PipelineStats` plus two store queries, instead of the
+    `metrics` crate with a global recorder. Per-species counts come from the database, so they
+    survive restarts; the other counters are per process.
+  - A chunk dropped by the drop-oldest queue is replaced in place by a `Missing` marker. The
+    inference thread treats it as possibly containing human speech and blanks both neighbours.
+    Consecutive markers for one source merge, so a stalled consumer cannot grow the queue.
+  - Detection inserts are retried twice with backoff before being counted as store errors.
+  - `cargo-deny` enforces the dependency policy mechanically: FFI-wrapper crates are banned by
+    name, licences are allow-listed, and only crates.io is an accepted source. All workspace crates
+    are `publish = false` so their path dependencies are not treated as wildcards.
+- **Why.** A hand-rendered endpoint is about 80 lines with no new dependency and no global state.
+  Treating a lost chunk as possibly human errs on the side of privacy, which is the purpose of the
+  rule. Checking the policy in CI means a future contributor cannot add an FFI crate by accident.
+- **Rejected.** `metrics` + `metrics-exporter-prometheus` (its default features pull in an HTTP
+  server and push-gateway client); ignoring dropped chunks for privacy (the #12 limitation).

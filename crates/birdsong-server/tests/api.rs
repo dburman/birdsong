@@ -726,3 +726,36 @@ async fn dashboard_assets_are_served() {
     )
     .await;
 }
+
+#[tokio::test]
+async fn prometheus_metrics() {
+    let env = env().await;
+    let (status, headers, body) = send(&env.router, "/metrics", &[]).await;
+    assert_eq!(status, StatusCode::OK);
+    assert!(headers[header::CONTENT_TYPE]
+        .to_str()
+        .unwrap()
+        .starts_with("text/plain; version=0.0.4"));
+    let text = String::from_utf8(body).unwrap();
+    assert!(text.contains("birdsong_chunks_processed_total 0"), "{text}");
+    assert!(
+        text.contains(
+            r#"birdsong_build_info{version="0.1.0",model="birdnet-v2.4",station="Test station"} 1"#
+        ),
+        "{text}"
+    );
+    assert!(text.contains(r#"birdsong_species_detections{scientific_name="Cardinalis cardinalis",common_name="Northern Cardinal"} 17"#), "{text}");
+    let clip_bytes: u64 = text
+        .lines()
+        .find_map(|l| l.strip_prefix("birdsong_clip_bytes "))
+        .and_then(|v| v.parse().ok())
+        .expect("clip bytes gauge");
+    assert!(clip_bytes > 0);
+    for line in text.lines().filter(|l| !l.starts_with('#')) {
+        let (name, value) = line
+            .rsplit_once(' ')
+            .unwrap_or_else(|| panic!("bad line {line:?}"));
+        assert!(name.starts_with("birdsong_"), "{line}");
+        assert!(value.parse::<f64>().is_ok(), "{line}");
+    }
+}

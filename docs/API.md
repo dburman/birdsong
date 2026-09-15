@@ -260,6 +260,30 @@ data: {"id":1234,"detected_at":"2026-05-15T10:00:00.000000Z", ...}
 curl -N "$PI/api/v1/stream"
 ```
 
+### `GET /metrics`
+
+Prometheus text format (outside `/api/v1`, where scrapers expect it). Counters reset when the
+process restarts; `birdsong_species_detections` comes from the database and does not.
+
+```bash
+curl -s "http://birdsong.local:8080/metrics"
+```
+
+```text
+# TYPE birdsong_chunks_processed_total counter
+birdsong_chunks_processed_total 1200
+birdsong_chunks_dropped_total 0
+birdsong_inference_seconds 0.312
+birdsong_seconds_since_last_chunk 1.4
+birdsong_clip_bytes 25318044
+birdsong_species_detections{scientific_name="Poecile atricapillus",common_name="Black-capped Chickadee"} 42
+birdsong_build_info{version="0.1.0",model="birdnet-v2.4",station="Backyard"} 1
+```
+
+Also exported: `birdsong_uptime_seconds`, `birdsong_masked_chunks_total`,
+`birdsong_audio_gaps_total`, `birdsong_detections_total`, `birdsong_inference_errors_total`,
+`birdsong_store_errors_total`, `birdsong_clips_written_total`, `birdsong_clip_errors_total`.
+
 ### `GET /api/v1/config`
 
 The effective configuration, with credentials in stream URLs replaced by `***`.

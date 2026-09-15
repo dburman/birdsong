@@ -914,6 +914,20 @@ a few minutes outdoors.
 
 ### Step 11 — Hardening and observability
 
+> **STATUS: DONE (2026-09-15).** `GET /metrics` serves Prometheus text rendered by hand from the
+> pipeline counters and two database queries (chunks processed/dropped/masked, gaps, detections,
+> inference, store and clip errors, mean inference seconds, seconds since the last chunk, clip
+> bytes, per-species detection counts, build info). A chunk dropped under load now leaves a
+> `Missing` marker in the queue, and `NeighbourMask::push_missing` blanks both neighbours, so the
+> privacy rule holds even when speech is dropped (resolves the limitation in DECISIONS #12);
+> consecutive markers merge so the queue stays bounded. Detection inserts retry twice (200 ms, 1 s)
+> before counting a store error. A missing model directory exits non-zero with the path in the
+> message (CLI test). `deny.toml` checks licences, advisories and sources and **bans FFI-wrapper
+> crates** (`ort`, `tflitec`, `tensorflow`, `openssl-sys`, `native-tls`, `aws-lc-*`, `ffmpeg-*`,
+> `alsa-sys`); CI runs it, and all crates are `publish = false`. `cargo audit` is clean.
+> Memory bounds are documented in `docs/RASPBERRY_PI.md`; a two-source, 1.5 s-overlap load test on
+> the arm64 image (full core and a 10 % CPU quota) is recorded there. See DECISIONS #19.
+
 - `GET /metrics` Prometheus text (chunks, drops, inference ms, detections by
   species, clip bytes) via `metrics` + `metrics-exporter-prometheus`.
 - Backpressure review: confirm memory is bounded (ring buffer + channels).

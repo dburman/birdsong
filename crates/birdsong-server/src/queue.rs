@@ -1,8 +1,10 @@
 //! Bounded hand-off from the async chunker tasks to the blocking inference thread.
 //!
-//! Only chunks count towards the capacity. Control markers (gap, end of stream) are never dropped
-//! so per-source state in the worker stays correct. When full, a push either drops the oldest
-//! queued chunk (live audio: keep up, lose old audio) or waits (file analysis: lose nothing).
+//! Only chunks count towards the capacity. Control markers (gap, end of stream, missing chunk) are
+//! never dropped so per-source state in the worker stays correct. When full, a push either drops
+//! the oldest queued chunk (live audio: keep up, lose old audio) or waits (file analysis: lose
+//! nothing). A dropped chunk is replaced by a `Missing` marker in the same position, so the
+//! privacy filter can treat the gap as possibly containing human speech.
 
 use std::collections::VecDeque;
 use std::sync::{Arc, Condvar, Mutex, MutexGuard};
@@ -27,6 +29,8 @@ pub(crate) enum QueueItem {
     Gap(Arc<str>),
     /// The source finished; flush its privacy state.
     End(Arc<str>),
+    /// A chunk of this source was dropped here because inference fell behind.
+    Missing(Arc<str>),
 }
 
 #[derive(Debug, PartialEq)]
@@ -89,21 +93,11 @@ impl ChunkQueue {
                     return PushOutcome::Queued;
                 }
                 if policy == Backpressure::DropOldest {
-                    let oldest = g
-                        .items
-                        .iter()
-                        .position(|i| matches!(i, QueueItem::Chunk(_)));
-                    let dropped = oldest.and_then(|p| g.items.remove(p));
-                    g.items.push_back(item); // one out, one in: chunk count unchanged
+                    let outcome = drop_oldest_chunk(&mut g.items);
+                    g.items.push_back(item); // one chunk out, one in: chunk count unchanged
                     drop(g);
                     self.available.notify_one();
-                    return match dropped {
-                        Some(QueueItem::Chunk(c)) => PushOutcome::DroppedOldest {
-                            source_id: c.source_id,
-                            start_at: c.start_at,
-                        },
-                        _ => PushOutcome::Queued,
-                    };
+                    return outcome;
                 }
             }
             notified.await;
@@ -142,6 +136,35 @@ impl ChunkQueue {
     }
 }
 
+/// Replace the oldest queued chunk with a `Missing` marker for its source. Consecutive markers for
+/// the same source are merged so a stalled consumer cannot grow the queue without bound.
+fn drop_oldest_chunk(items: &mut VecDeque<QueueItem>) -> PushOutcome {
+    let Some(position) = items.iter().position(|i| matches!(i, QueueItem::Chunk(_))) else {
+        return PushOutcome::Queued;
+    };
+    let source_id = match &items[position] {
+        QueueItem::Chunk(c) => Arc::clone(&c.source_id),
+        _ => return PushOutcome::Queued,
+    };
+    let merge =
+        position > 0 && matches!(&items[position - 1], QueueItem::Missing(s) if *s == source_id);
+    let removed = if merge {
+        items.remove(position)
+    } else {
+        Some(std::mem::replace(
+            &mut items[position],
+            QueueItem::Missing(Arc::clone(&source_id)),
+        ))
+    };
+    match removed {
+        Some(QueueItem::Chunk(c)) => PushOutcome::DroppedOldest {
+            source_id: c.source_id,
+            start_at: c.start_at,
+        },
+        _ => PushOutcome::Queued,
+    }
+}
+
 /// Marks the consumer gone when dropped, including during a panic unwind.
 pub(crate) struct ConsumerGuard(pub Arc<ChunkQueue>);
 
@@ -172,6 +195,7 @@ mod tests {
             QueueItem::Chunk(c) => format!("c{}", c.samples[0]),
             QueueItem::Gap(_) => "gap".into(),
             QueueItem::End(_) => "end".into(),
+            QueueItem::Missing(_) => "missing".into(),
         }
     }
 
@@ -181,7 +205,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn drop_oldest_keeps_controls() {
+    async fn drop_oldest_keeps_controls_and_marks_the_gap() {
         let q = ChunkQueue::new(2);
         assert_eq!(
             q.push(chunk(0), Backpressure::DropOldest).await,
@@ -202,7 +226,17 @@ mod tests {
             }
             other => panic!("{other:?}"),
         }
-        assert_eq!(drain(&q), ["gap", "c1", "c2"]);
+        assert_eq!(drain(&q), ["missing", "gap", "c1", "c2"]);
+    }
+
+    #[tokio::test]
+    async fn consecutive_drops_merge_into_one_marker() {
+        let q = ChunkQueue::new(2);
+        for n in 0..6 {
+            q.push(chunk(n), Backpressure::DropOldest).await;
+        }
+        // c0..c3 dropped one after another: a single marker, then the two newest chunks.
+        assert_eq!(drain(&q), ["missing", "c4", "c5"]);
     }
 
     #[tokio::test]

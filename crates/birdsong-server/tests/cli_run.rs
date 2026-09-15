@@ -106,3 +106,28 @@ bind = "127.0.0.1:0"
     assert!(!rows.is_empty());
     assert_eq!(rows[0].source_id, "file0");
 }
+
+#[test]
+fn run_fails_clearly_when_models_are_missing() {
+    let dir = tempfile::tempdir().unwrap();
+    let config_path = dir.path().join("birdsong.toml");
+    std::fs::write(
+        &config_path,
+        format!(
+            "[[audio.sources]]\nid = \"file0\"\nkind = \"file\"\npath = \"/nonexistent.wav\"\n[model]\ndir = \"/nonexistent-models\"\n[storage]\ndata_dir = {:?}\n[server]\nbind = \"127.0.0.1:0\"\n",
+            dir.path().join("data").display().to_string()
+        ),
+    )
+    .unwrap();
+    let out = Command::new(env!("CARGO_BIN_EXE_birdsong"))
+        .args(["run", "--config"])
+        .arg(&config_path)
+        .output()
+        .unwrap();
+    assert!(!out.status.success());
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(
+        stderr.contains("loading models") && stderr.contains("/nonexistent-models"),
+        "stderr:\n{stderr}"
+    );
+}

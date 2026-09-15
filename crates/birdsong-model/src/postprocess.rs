@@ -156,13 +156,16 @@ fn Label_is_human(l: &crate::Label) -> bool {
 
 /// BirdNET-Pi blanks the chunks *next to* a human chunk as well. On a live stream the next chunk
 /// is not known yet, so this holds each analysis back by one chunk (3 s of latency) and releases
-/// it once its successor has been seen. Call [`NeighbourMask::flush`] at end of stream and
-/// [`NeighbourMask::reset`] after a gap in the audio.
+/// it once its successor has been seen. Call [`NeighbourMask::push_missing`] when a chunk was lost
+/// (dropped under load): it may have contained speech, so both of its neighbours are blanked.
+/// Call [`NeighbourMask::flush`] at end of stream and [`NeighbourMask::reset`] after a gap.
 #[derive(Debug, Default)]
 pub struct NeighbourMask {
     pending: Option<ChunkAnalysis>,
-    /// Whether the chunk before `pending` had a human.
+    /// Whether the chunk before `pending` had (or may have had) a human.
     before_pending_human: bool,
+    /// Whether the most recent chunk seen, pushed or missing, had (or may have had) a human.
+    last_human: bool,
 }
 
 impl NeighbourMask {
@@ -170,32 +173,46 @@ impl NeighbourMask {
         Self::default()
     }
 
+    fn blank(mut analysis: ChunkAnalysis) -> ChunkAnalysis {
+        analysis.masked = true;
+        analysis.detections.clear();
+        analysis
+    }
+
     /// Feed the newest analysis; returns the previous one, masked if any neighbour had a human.
     pub fn push(&mut self, current: ChunkAnalysis) -> Option<ChunkAnalysis> {
-        let released = self.pending.take().map(|mut prev| {
-            if self.before_pending_human || current.human_present {
-                prev.masked = true;
-                prev.detections.clear();
+        let blank_previous = self.before_pending_human || current.human_present;
+        let released = self.pending.take().map(|prev| {
+            if blank_previous {
+                Self::blank(prev)
+            } else {
+                prev
             }
-            self.before_pending_human = prev.human_present;
-            prev
         });
-        if released.is_none() {
-            self.before_pending_human = false;
-        }
+        self.before_pending_human = self.last_human;
+        self.last_human = current.human_present;
         self.pending = Some(current);
+        released
+    }
+
+    /// A chunk between the previous and the next one was lost. Returns the held analysis, blanked.
+    pub fn push_missing(&mut self) -> Option<ChunkAnalysis> {
+        let released = self.pending.take().map(Self::blank);
+        self.before_pending_human = false;
+        self.last_human = true;
         released
     }
 
     /// Release the last held analysis (end of stream).
     pub fn flush(&mut self) -> Option<ChunkAnalysis> {
-        let mut last = self.pending.take()?;
-        if self.before_pending_human {
-            last.masked = true;
-            last.detections.clear();
-        }
+        let before_human = self.before_pending_human;
+        let last = self
+            .pending
+            .take()
+            .map(|a| if before_human { Self::blank(a) } else { a });
         self.before_pending_human = false;
-        Some(last)
+        self.last_human = false;
+        last
     }
 
     /// Drop state after a discontinuity, releasing the held analysis first.
@@ -374,5 +391,31 @@ mod tests {
         let c2 = m.reset().unwrap();
         assert!(!c2.masked);
         assert!(m.push(chunk(3, false)).is_none());
+    }
+
+    #[test]
+    fn missing_chunk_blanks_both_neighbours() {
+        let mut m = NeighbourMask::new();
+        assert!(m.push(chunk(0, false)).is_none());
+        let c0 = m.push_missing().unwrap(); // chunk 1 was dropped
+        assert!(
+            c0.masked && c0.detections.is_empty(),
+            "chunk before the gap is blanked"
+        );
+        assert!(m.push(chunk(2, false)).is_none());
+        let c2 = m.push(chunk(3, false)).unwrap();
+        assert!(
+            c2.masked && c2.detections.is_empty(),
+            "chunk after the gap is blanked"
+        );
+        let c3 = m.flush().unwrap();
+        assert!(
+            !c3.masked && c3.detections.len() == 1,
+            "further chunks are unaffected"
+        );
+        // A missing chunk with nothing pending still blanks the next one.
+        assert!(m.push_missing().is_none());
+        m.push(chunk(5, false));
+        assert!(m.flush().unwrap().masked);
     }
 }

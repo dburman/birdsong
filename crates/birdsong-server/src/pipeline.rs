@@ -408,6 +408,15 @@ fn inference_worker(
                     }
                 }
             }
+            QueueItem::Missing(source_id) => {
+                if privacy {
+                    if let Some(a) = masks.entry(source_id).or_default().push_missing() {
+                        if !emit(a) {
+                            return;
+                        }
+                    }
+                }
+            }
             QueueItem::Gap(source_id) => {
                 if let Some(a) = masks.get_mut(&source_id).and_then(NeighbourMask::reset) {
                     if !emit(a) {
@@ -465,7 +474,7 @@ async fn storage_task(
             common_name: best.common_name.clone(),
             confidence: best.confidence,
         };
-        match store.insert_many(&analysis.detections).await {
+        match insert_with_retry(store.as_ref(), &analysis.detections).await {
             Ok(ids) => {
                 stats.detections_stored(ids.len() as u64);
                 job.ids.clone_from(&ids);
@@ -490,5 +499,119 @@ async fn storage_task(
                 tracing::error!(error = %e, count = analysis.detections.len(), "failed to store detections");
             }
         }
+    }
+}
+
+/// Insert detections, retrying twice (after 200 ms, then 1 s) so a briefly locked or busy database
+/// does not lose them.
+async fn insert_with_retry(
+    store: &dyn DetectionStore,
+    detections: &[Detection],
+) -> Result<Vec<i64>, birdsong_store::StoreError> {
+    let mut delay = std::time::Duration::from_millis(200);
+    let mut attempt = 1;
+    loop {
+        match store.insert_many(detections).await {
+            Ok(ids) => return Ok(ids),
+            Err(e) if attempt < 3 => {
+                tracing::warn!(attempt, error = %e, "storing detections failed; retrying");
+                tokio::time::sleep(delay).await;
+                delay *= 5;
+                attempt += 1;
+            }
+            Err(e) => return Err(e),
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::sync::atomic::{AtomicUsize, Ordering};
+
+    use birdsong_store::{
+        ClipInfo, DailyStats, DetectionQuery, DetectionRecord, SpeciesSummary, StoreError,
+    };
+    use chrono::{DateTime, NaiveDate, TimeZone, Utc};
+
+    /// Fails the first `failures` inserts, then succeeds.
+    struct FlakyStore {
+        failures: usize,
+        calls: AtomicUsize,
+    }
+
+    #[async_trait::async_trait]
+    impl DetectionStore for FlakyStore {
+        async fn insert_many(&self, detections: &[Detection]) -> Result<Vec<i64>, StoreError> {
+            let call = self.calls.fetch_add(1, Ordering::SeqCst);
+            if call < self.failures {
+                return Err(StoreError::Corrupt {
+                    column: "test",
+                    value: "database is locked".into(),
+                });
+            }
+            Ok((1..=detections.len() as i64).collect())
+        }
+        async fn set_clip(&self, _: &[i64], _: Option<&ClipInfo>) -> Result<(), StoreError> {
+            Ok(())
+        }
+        async fn get(&self, _: i64) -> Result<Option<DetectionRecord>, StoreError> {
+            Ok(None)
+        }
+        async fn list(&self, _: &DetectionQuery) -> Result<Vec<DetectionRecord>, StoreError> {
+            Ok(Vec::new())
+        }
+        async fn stats_daily(&self, date: NaiveDate) -> Result<DailyStats, StoreError> {
+            Ok(DailyStats {
+                date,
+                species: Vec::new(),
+            })
+        }
+        async fn species_summary(
+            &self,
+            _: Option<DateTime<Utc>>,
+        ) -> Result<Vec<SpeciesSummary>, StoreError> {
+            Ok(Vec::new())
+        }
+        async fn total_clip_bytes(&self) -> Result<u64, StoreError> {
+            Ok(0)
+        }
+    }
+
+    fn detection() -> Detection {
+        Detection {
+            id: None,
+            detected_at: Utc.with_ymd_and_hms(2026, 5, 1, 6, 0, 0).unwrap(),
+            scientific_name: "A".into(),
+            common_name: "a".into(),
+            confidence: 0.9,
+            source_id: "mic0".into(),
+            model_id: "test".into(),
+            clip_path: None,
+        }
+    }
+
+    #[tokio::test]
+    async fn inserts_are_retried_then_given_up() {
+        let flaky = FlakyStore {
+            failures: 2,
+            calls: AtomicUsize::new(0),
+        };
+        assert_eq!(
+            insert_with_retry(&flaky, &[detection()]).await.unwrap(),
+            [1]
+        );
+        assert_eq!(flaky.calls.load(Ordering::SeqCst), 3);
+
+        let broken = FlakyStore {
+            failures: usize::MAX,
+            calls: AtomicUsize::new(0),
+        };
+        assert!(insert_with_retry(&broken, &[detection()]).await.is_err());
+        assert_eq!(
+            broken.calls.load(Ordering::SeqCst),
+            3,
+            "three attempts in total"
+        );
     }
 }

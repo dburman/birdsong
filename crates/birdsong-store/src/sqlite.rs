@@ -221,6 +221,10 @@ fn record_from_row(r: &SqliteRow) -> Result<DetectionRecord, StoreError> {
 
 #[async_trait::async_trait]
 impl DetectionStore for SqliteStore {
+    async fn total_clip_bytes(&self) -> Result<u64, StoreError> {
+        SqliteStore::total_clip_bytes(self).await
+    }
+
     async fn insert_many(&self, detections: &[Detection]) -> Result<Vec<i64>, StoreError> {
         let p = &self.opts.params;
         let mut tx = self.writer.begin().await?;

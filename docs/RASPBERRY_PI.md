@@ -129,6 +129,35 @@ curl -s http://localhost:8080/api/v1/health
 Single-stream inference on the development machine takes about 25 ms per window; expect roughly
 10 to 20 times that on a Pi 4 and less on a Pi 5. These Pi figures are estimates until measured.
 
+## Monitoring
+
+`http://<pi-address>:8080/metrics` is in Prometheus format. A scrape job:
+
+```yaml
+scrape_configs:
+  - job_name: birdsong
+    static_configs:
+      - targets: ["birdsong.local:8080"]
+```
+
+Useful alerts: `birdsong_seconds_since_last_chunk > 60` (audio stopped) and
+`rate(birdsong_chunks_dropped_total[10m]) > 0` (the Pi cannot keep up).
+
+## Memory use
+
+Memory is bounded by design; nothing grows with uptime or with the number of detections.
+
+| Part | Size |
+|------|------|
+| Classifier and location model weights | about 80 MB |
+| Ring buffer per audio source (`audio.ring_buffer_seconds`, default 90 s of 48 kHz float) | 17 MB |
+| Capture channel per source (64 frames of 100 ms) | 1.2 MB |
+| Inference queue (4 chunks, all sources) | 2.3 MB |
+| Detection broadcast and pending clip jobs | under 1 MB |
+
+With two sources the container used about 230 MiB in testing, so a 1 GB Pi is enough and 2 GB
+leaves room for the OS and Docker.
+
 ## Troubleshooting
 
 | Symptom | Likely cause and fix |

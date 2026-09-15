@@ -3,6 +3,7 @@
 mod detections;
 mod error;
 mod insights;
+mod metrics;
 mod params;
 mod stream;
 mod ui;
@@ -75,6 +76,7 @@ pub fn router(state: AppState) -> Router {
         .route("/app.js", get(ui::app_js))
         .route("/style.css", get(ui::style_css))
         .route("/favicon.svg", get(ui::favicon))
+        .route("/metrics", get(metrics::metrics))
         .nest("/api/v1", api)
         .fallback(fallback)
         .layer(compression)
