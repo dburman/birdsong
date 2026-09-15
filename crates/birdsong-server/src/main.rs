@@ -3,13 +3,15 @@
 
 use std::path::PathBuf;
 use std::sync::Arc;
+use std::time::Instant;
 
 use anyhow::Context;
 use birdsong_core::Config;
 use birdsong_model::ModelBundle;
 use birdsong_server::analyze::{self, AnalyzeOptions};
+use birdsong_server::api::{self, AppState};
 use birdsong_server::{Pipeline, PipelineOptions};
-use birdsong_store::{Janitor, SqliteStore, StoreOptions};
+use birdsong_store::{DetectionStore, Janitor, SqliteStore, StoreOptions};
 use chrono::NaiveDate;
 use clap::{Args, Parser, Subcommand};
 use tokio_util::sync::CancellationToken;
@@ -33,7 +35,7 @@ enum Command {
         #[arg(long, default_value = "config/birdsong.toml")]
         config: PathBuf,
     },
-    /// Capture audio, detect birds and store detections until stopped (SIGINT/SIGTERM).
+    /// Capture audio, detect birds, store detections and serve the HTTP API until stopped.
     Run {
         /// Path to the TOML configuration file.
         #[arg(long, default_value = "config/birdsong.toml")]
@@ -235,14 +237,43 @@ async fn run(config: PathBuf, opts: PipelineOptions) -> anyhow::Result<()> {
         Err(e) => tracing::warn!(error = %e, "clips directory reconciliation failed"),
     }
 
-    let pipeline = Pipeline::from_config(cfg, bundle, Arc::new(store.clone()), opts)?;
+    // Bind before capturing audio so a port conflict fails fast.
+    let bind = cfg.server.bind_addr()?;
+    let listener = tokio::net::TcpListener::bind(bind)
+        .await
+        .with_context(|| format!("binding HTTP API to {bind}"))?;
+    tracing::info!(addr = %listener.local_addr()?, "HTTP API listening");
+
     let cancel = CancellationToken::new();
     tokio::spawn(shutdown_on_signal(cancel.clone()));
+
+    let config_for_api = Arc::new(cfg.clone());
+    let clips_dir = cfg.storage.clips_dir();
+    let model_id = bundle.classifier.model_id().to_string();
+    let store_handle: Arc<dyn DetectionStore> = Arc::new(store.clone());
+    let pipeline = Pipeline::from_config(cfg, bundle, Arc::clone(&store_handle), opts)?;
+
+    let state = AppState {
+        store: store_handle,
+        clips_dir,
+        config: config_for_api,
+        stats: pipeline.stats(),
+        detections: pipeline.detections_sender(),
+        model_id,
+        started: Instant::now(),
+        shutdown: cancel.clone(),
+    };
+    let server = tokio::spawn(api::serve(state, listener));
     let janitor_task = tokio::spawn(janitor.run(cancel.clone()));
 
     let result = pipeline.run(cancel.clone()).await;
     cancel.cancel();
     let _ = janitor_task.await;
+    match server.await {
+        Ok(Ok(())) => {}
+        Ok(Err(e)) => tracing::warn!(error = %e, "HTTP API stopped with an error"),
+        Err(e) => tracing::warn!(error = %e, "HTTP API task panicked"),
+    }
     store.close().await;
     result.map(|_| ())
 }

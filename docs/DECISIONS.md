@@ -183,3 +183,25 @@ One entry per non-obvious decision. Newest at the bottom. Format: Decision / Why
   multi-species windows, and bounds disk use as configured.
 - **Rejected.** Writing clips inside the storage task (adds latency); per-detection copies of
   the same audio (wastes disk and double-counts the size cap).
+
+## 15. 2026-09-15 — HTTP API details
+
+- **Decision.**
+  - Query parameters are read as strings and parsed by hand, so every bad value produces the
+    documented `{"error": ...}` JSON with a message naming the parameter.
+  - Detection pages return both `next_after_id` (highest id, for polling forward) and
+    `next_before_id` (lowest id of a full page, for paging back).
+  - The event stream sends full `DetectionRecord`s (same shape as the list endpoints, looked up by
+    id) rather than the pipeline's smaller `Detection`, and uses the id as the SSE event id.
+    It subscribes before replaying, skips ids at or below the last one sent, and replays from the
+    database after a broadcast lag instead of silently losing events.
+  - Streams end when the shutdown token is cancelled; otherwise axum's graceful shutdown would
+    wait forever on open event streams.
+  - gzip only (the zstd option pulls in C code); audio is excluded from compression so byte
+    ranges stay valid.
+  - The listener is bound before audio capture starts, so a port conflict fails immediately.
+  - `/species` and `/stats/*` are not paginated: at most a few hundred species exist.
+- **Why.** Consumers get one object shape, reliable cursors and reconnection, and errors they can
+  act on. Shutdown stays prompt for `docker stop`.
+- **Rejected.** axum's typed `Query<T>` extractor (plain-text rejections); sending events
+  straight from the broadcast without a lookup (inconsistent shape).

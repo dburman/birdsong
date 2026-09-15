@@ -29,7 +29,12 @@ tokio.workspace = true
 tokio-util.workspace = true
 tracing.workspace = true
 tracing-subscriber.workspace = true
+axum.workspace = true
+tower.workspace = true
+tower-http.workspace = true
+futures-util.workspace = true
 
 [dev-dependencies]
 tempfile.workspace = true
+http-body-util.workspace = true
 png.workspace = true

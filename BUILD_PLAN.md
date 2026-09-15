@@ -376,8 +376,8 @@ Com_Name, Confidence, Lat, Lon, Cutoff, Week, Sens, Overlap, File_Name).
 
 ## 6. HTTP API (v1)
 
-Base path `/api/v1`. All timestamps RFC 3339 UTC. All list endpoints return
-`{"items": [...], "next_after_id": <int|null>}`.
+Base path `/api/v1`. All timestamps RFC 3339 UTC. Detection list endpoints return
+`{"items": [...], "next_after_id": <int|null>, "next_before_id": <int|null>}`; see `docs/API.md`.
 
 | Method | Path | Purpose |
 |--------|------|---------|
@@ -785,6 +785,20 @@ the currently allowed species for the configured lat/lon/week.
 ---
 
 ### Step 8 — HTTP API + SSE
+
+> **STATUS: DONE (2026-09-15).** `birdsong-server::api` provides `AppState`, `router(state)` and
+> `serve(state, listener)` with every §6 endpoint except `/` (Step 9). JSON errors for bad
+> parameters (hand-parsed, never axum's plain-text rejections), unknown ids, missing files and
+> unknown routes. Pages carry `next_after_id` and `next_before_id`. Audio and spectrograms are
+> served with `ServeFile` (Range support; audio never compressed). `/stream` subscribes before
+> replaying from `Last-Event-ID`, never repeats an id, re-replays after a lag, sends keep-alives,
+> and ends on shutdown so graceful stop completes. `/config` redacts stream credentials.
+> gzip compression, CORS from config, request tracing. `birdsong run` binds the port before
+> starting capture and stops the server with the pipeline. `docs/API.md` documents every
+> endpoint with curl examples and the ingestion recipe. Tests: 11 API tests on a 50-row database
+> (shapes, cursor walk both ways, filters, bad parameters, 404s incl. purged files, Range, PNG,
+> species and stats, config redaction, CORS, live event within 1 s, replay without duplicates,
+> shutdown, real socket). See DECISIONS #15.
 
 **Objective.** Implement §6 with axum.
 

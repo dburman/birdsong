@@ -48,6 +48,8 @@ path = {fixture:?}
 dir = {models:?}
 [storage]
 data_dir = {data:?}
+[server]
+bind = "127.0.0.1:0"
 "#,
             fixture = repo_root()
                 .join("tools/fixtures/soundscape_15s.wav")
@@ -81,6 +83,7 @@ data_dir = {data:?}
     let mut stderr = String::new();
     std::io::Read::read_to_string(child.stderr.as_mut().unwrap(), &mut stderr).unwrap();
     assert!(status.success(), "exit {status}; stderr:\n{stderr}");
+    assert!(stderr.contains("HTTP API listening"), "stderr:\n{stderr}");
     assert!(
         stderr.contains("detection") && stderr.contains("Black-capped Chickadee"),
         "stderr:\n{stderr}"
