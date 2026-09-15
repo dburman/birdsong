@@ -16,6 +16,7 @@ mod ffmpeg;
 mod frame;
 mod ring;
 mod source;
+pub mod spectrogram;
 pub mod wav;
 mod wav_source;
 
@@ -25,4 +26,5 @@ pub use ffmpeg::{ffmpeg_args, redact_text, redact_url, FfmpegOptions, FfmpegSour
 pub use frame::{apply_gain, db_to_gain, delta_to_samples, samples_to_delta, AudioFrame};
 pub use ring::{lock_ring, Extracted, RingBuffer, SharedRingBuffer};
 pub use source::{source_from_config, AudioSource};
+pub use spectrogram::SpectrogramOptions;
 pub use wav_source::{Pacing, WavFileSource};

@@ -3,6 +3,7 @@
 //! HTTP API and web UI.
 
 pub mod analyze;
+pub mod clips;
 pub mod pipeline;
 mod queue;
 pub mod stats;

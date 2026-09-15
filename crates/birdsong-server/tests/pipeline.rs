@@ -122,6 +122,30 @@ async fn fixture_detections_are_stored_and_broadcast() {
 
     let first = rx.try_recv().expect("broadcast of stored detection");
     assert!(first.id.is_some());
+
+    assert!(summary.clips_written >= 1, "{summary:?}");
+    assert_eq!(summary.clip_errors, 0, "{summary:?}");
+    let chunk0 = store.get(rows.last().unwrap().id).await.unwrap().unwrap();
+    let clip = chunk0
+        .clip_path
+        .expect("clip saved for the chickadee detection");
+    assert_eq!(
+        clip,
+        "2026-05-15/Black_capped_Chickadee/2026-05-15T10-00-00.000Z_file0_0.75.wav"
+    );
+    let clips_dir = dir.path().join("clips");
+    let audio = birdsong_audio::wav::read_wav(&clips_dir.join(&clip)).unwrap();
+    assert_eq!(
+        audio.samples.len(),
+        216_000,
+        "6 s window clamped at the start of the recording"
+    );
+    let png_rel = chunk0.spectrogram_path.expect("spectrogram saved");
+    let decoder = png::Decoder::new(std::io::BufReader::new(
+        std::fs::File::open(clips_dir.join(&png_rel)).unwrap(),
+    ));
+    let reader = decoder.read_info().unwrap();
+    assert_eq!((reader.info().width, reader.info().height), (800, 300));
 }
 
 #[tokio::test(flavor = "multi_thread")]

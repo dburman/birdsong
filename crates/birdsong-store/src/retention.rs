@@ -31,6 +31,7 @@ pub fn plan_purge(
         .then(|| now - TimeDelta::days(policy.clip_max_age_days as i64));
     let purge = |c: &StoredClip, reason| ClipToPurge {
         clip_path: c.clip_path.clone(),
+        spectrogram_path: c.spectrogram_path.clone(),
         bytes: c.bytes,
         detected_at: c.detected_at,
         reason,
@@ -84,6 +85,7 @@ mod tests {
     fn clip(name: &str, days_ago: i64, mb: u64) -> StoredClip {
         StoredClip {
             clip_path: name.into(),
+            spectrogram_path: None,
             bytes: mb * MB,
             detected_at: now() - TimeDelta::days(days_ago),
         }

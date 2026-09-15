@@ -5,6 +5,7 @@
 //! retention ([`plan_purge`]). The schema lives in `migrations/` and is applied on open.
 
 mod error;
+mod janitor;
 mod retention;
 mod sqlite;
 mod store;
@@ -12,6 +13,7 @@ mod timefmt;
 mod types;
 
 pub use error::StoreError;
+pub use janitor::{safe_clip_path, Janitor, PurgeReport, ReconcileReport};
 pub use retention::plan_purge;
 pub use sqlite::SqliteStore;
 pub use store::DetectionStore;

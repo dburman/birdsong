@@ -25,6 +25,8 @@ pub enum AudioError {
     FfmpegFailed { status: String, stderr: String },
     #[error("audio source {id:?}: {message}")]
     Config { id: String, message: String },
+    #[error("cannot encode {path}: {message}")]
+    Encode { path: PathBuf, message: String },
     #[error("background task failed: {0}")]
     Task(String),
 }

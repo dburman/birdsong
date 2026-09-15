@@ -159,3 +159,27 @@ One entry per non-obvious decision. Newest at the bottom. Format: Decision / Why
 - **Why.** The tool exists to answer "why didn't `run` detect X"; a different code path would give
   different answers. Config-free use makes it handy on a laptop with a downloaded recording.
 - **Rejected.** Reading the date from WAV metadata or file names (unreliable across recorders).
+
+## 14. 2026-09-15 — Clip writing and retention mechanics
+
+- **Decision.**
+  - A separate clip task, fed by the storage task after the insert, so waiting for the audio
+    after a window (up to 1.5 s by default) never delays inserts, logs or the live stream.
+    A job waits until the ring buffer covers the window's end, the source ended (signalled
+    through the pipeline), or clip length + 5 s passed; then the window is cut, clamped to
+    what is buffered.
+  - One clip per window, filed under the best detection's species; every detection of the
+    window points at it (DECISIONS #11).
+  - Files are written as `.tmp` and renamed. Deletion order is file first, then row; a crash
+    between the two leaves an orphan file that the startup reconcile removes, never a row that
+    points at nothing.
+  - Clip paths from the database are only joined onto the clips directory when every component
+    is a plain name; anything else is detached and never touched on disk.
+  - PNG encoding uses the `png` crate directly rather than `image` (smaller dependency, same
+    pure-Rust encoder underneath).
+  - The row age limit deletes the clips of the rows it removes, including otherwise exempt
+    "best of day" clips, so no files are orphaned.
+- **Why.** Keeps the database and disk consistent under crashes, keeps playback correct for
+  multi-species windows, and bounds disk use as configured.
+- **Rejected.** Writing clips inside the storage task (adds latency); per-detection copies of
+  the same audio (wastes disk and double-counts the size cap).

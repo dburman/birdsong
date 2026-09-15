@@ -737,6 +737,21 @@ the currently allowed species for the configured lat/lon/week.
 
 ### Step 7 — Clips, spectrograms, retention janitor
 
+> **STATUS: DONE (2026-09-15).** `birdsong-audio::spectrogram` renders an 800×300 PNG (STFT 1024/256,
+> dB, 0–12 kHz, dark-to-bright ramp; `png` crate). The pipeline's clip writer
+> (`birdsong-server::clips`) receives one job per stored window, waits until the source's ring
+> buffer holds the end of the §7.7 window (or the source ended), cuts it (clamped when not
+> available), writes `<local date>/<Species>/<UTC time>_<source>_<conf>.wav` and `.png` via
+> `.tmp` + rename, and attaches both to every detection of the window. `birdsong-store::Janitor`
+> runs `run_once` every `purge_interval_minutes` (age, size cap, best-per-species exemption, row
+> age limit that also removes those rows' clips, empty directories; files deleted before rows are
+> detached) and `reconcile` at startup (missing files detached, unreferenced files deleted,
+> never outside the clips directory via `safe_clip_path`). `birdsong run` reconciles, then runs the
+> janitor alongside the pipeline. Stats gained `clips_written`/`clip_errors`.
+> Tests: spectrogram size, tone position, silence; clip window, path layout, exact/clamped
+> extraction, atomic write; janitor rules, row age, reconcile both ways incl. path traversal;
+> pipeline fixture writes the expected clip (216 000 samples, clamped) and PNG. See DECISIONS #14.
+
 **Objective.** Save audio for playback; enforce the rolling window.
 
 **Deliverables.**

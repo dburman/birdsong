@@ -9,7 +9,7 @@ use birdsong_core::Config;
 use birdsong_model::ModelBundle;
 use birdsong_server::analyze::{self, AnalyzeOptions};
 use birdsong_server::{Pipeline, PipelineOptions};
-use birdsong_store::{SqliteStore, StoreOptions};
+use birdsong_store::{Janitor, SqliteStore, StoreOptions};
 use chrono::NaiveDate;
 use clap::{Args, Parser, Subcommand};
 use tokio_util::sync::CancellationToken;
@@ -219,11 +219,30 @@ async fn run(config: PathBuf, opts: PipelineOptions) -> anyhow::Result<()> {
     .await
     .context("opening database")?;
 
+    let janitor = Janitor::new(
+        store.clone(),
+        cfg.storage.clips_dir(),
+        cfg.retention.clone(),
+    );
+    match janitor.reconcile().await {
+        Ok(r) => tracing::info!(
+            rows_cleared = r.rows_cleared,
+            orphan_files_deleted = r.orphan_files_deleted,
+            dirs_removed = r.dirs_removed,
+            errors = r.errors,
+            "clips directory reconciled"
+        ),
+        Err(e) => tracing::warn!(error = %e, "clips directory reconciliation failed"),
+    }
+
     let pipeline = Pipeline::from_config(cfg, bundle, Arc::new(store.clone()), opts)?;
     let cancel = CancellationToken::new();
     tokio::spawn(shutdown_on_signal(cancel.clone()));
+    let janitor_task = tokio::spawn(janitor.run(cancel.clone()));
 
-    let result = pipeline.run(cancel).await;
+    let result = pipeline.run(cancel.clone()).await;
+    cancel.cancel();
+    let _ = janitor_task.await;
     store.close().await;
     result.map(|_| ())
 }

@@ -50,7 +50,7 @@ const EXEMPT_CLIPS: &str = "SELECT DISTINCT clip_path FROM ( \
      WHERE rn <= ?";
 
 const STORED_CLIPS: &str =
-    "SELECT clip_path, COALESCE(MAX(clip_bytes), 0) AS bytes, MAX(detected_at_utc) AS detected_at \
+    "SELECT clip_path, MAX(spectrogram_path) AS spectrogram_path, COALESCE(MAX(clip_bytes), 0) AS bytes, MAX(detected_at_utc) AS detected_at \
      FROM detections WHERE clip_path IS NOT NULL GROUP BY clip_path";
 
 const TOTAL_CLIP_BYTES: &str = "SELECT COALESCE(SUM(bytes), 0) AS total FROM ( \
@@ -123,6 +123,7 @@ impl SqliteStore {
             .map(|r| {
                 Ok(StoredClip {
                     clip_path: r.try_get("clip_path")?,
+                    spectrogram_path: r.try_get("spectrogram_path")?,
                     bytes: r.try_get::<i64, _>("bytes")?.max(0) as u64,
                     detected_at: parse_ts(
                         "detected_at_utc",

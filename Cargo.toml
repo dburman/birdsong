@@ -36,7 +36,7 @@ tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 
 # async
-tokio = { version = "1", features = ["rt-multi-thread", "macros", "process", "io-util", "sync", "time", "signal"] }
+tokio = { version = "1", features = ["rt-multi-thread", "macros", "process", "io-util", "sync", "time", "signal", "fs"] }
 tokio-util = "0.7"
 async-trait = "0.1"
 
@@ -49,6 +49,7 @@ tempfile = "3"
 # audio / dsp / inference
 hound = "3.5"
 rustfft = "6"
+png = "0.18"
 tract-onnx = "0.23"
 
 [profile.release]

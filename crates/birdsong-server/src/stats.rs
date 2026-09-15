@@ -19,6 +19,8 @@ pub struct PipelineStats {
     detections: AtomicU64,
     inference_errors: AtomicU64,
     store_errors: AtomicU64,
+    clips_written: AtomicU64,
+    clip_errors: AtomicU64,
     /// Exponentially weighted mean inference time in microseconds; 0 = no sample yet.
     inference_micros_ewma: AtomicU64,
     /// Start time of the newest processed chunk, microseconds since the epoch; 0 = none yet.
@@ -35,6 +37,8 @@ pub struct StatsSnapshot {
     pub detections: u64,
     pub inference_errors: u64,
     pub store_errors: u64,
+    pub clips_written: u64,
+    pub clip_errors: u64,
     pub mean_inference_ms: Option<f64>,
     pub last_chunk_at: Option<DateTime<Utc>>,
 }
@@ -84,6 +88,14 @@ impl PipelineStats {
         self.store_errors.fetch_add(1, Ordering::Relaxed);
     }
 
+    pub(crate) fn clip_written(&self) {
+        self.clips_written.fetch_add(1, Ordering::Relaxed);
+    }
+
+    pub(crate) fn clip_error(&self) {
+        self.clip_errors.fetch_add(1, Ordering::Relaxed);
+    }
+
     pub fn snapshot(&self) -> StatsSnapshot {
         let ewma = self.inference_micros_ewma.load(Ordering::Relaxed);
         let last = self.last_chunk_at_micros.load(Ordering::Relaxed);
@@ -95,6 +107,8 @@ impl PipelineStats {
             detections: self.detections.load(Ordering::Relaxed),
             inference_errors: self.inference_errors.load(Ordering::Relaxed),
             store_errors: self.store_errors.load(Ordering::Relaxed),
+            clips_written: self.clips_written.load(Ordering::Relaxed),
+            clip_errors: self.clip_errors.load(Ordering::Relaxed),
             mean_inference_ms: (ewma > 0).then(|| ewma as f64 / 1000.0),
             last_chunk_at: (last != 0)
                 .then(|| DateTime::from_timestamp_micros(last))

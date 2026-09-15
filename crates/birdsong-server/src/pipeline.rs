@@ -24,6 +24,7 @@ use tokio::sync::{broadcast, mpsc};
 use tokio::task::JoinSet;
 use tokio_util::sync::CancellationToken;
 
+use crate::clips::{clip_task, ClipJob, ClipMsg, ClipSettings};
 use crate::queue::{Backpressure, ChunkQueue, ConsumerGuard, PushOutcome, QueueItem};
 use crate::stats::{PipelineStats, StatsSnapshot};
 
@@ -33,6 +34,8 @@ pub const QUEUE_CAPACITY: usize = 4;
 const FRAME_CHANNEL: usize = 64;
 /// Released chunk analyses waiting for the storage task.
 const RESULT_CHANNEL: usize = 64;
+/// Clip jobs waiting for the clip writer.
+const CLIP_CHANNEL: usize = 64;
 /// Detections buffered for slow broadcast subscribers before they lag.
 const BROADCAST_CAPACITY: usize = 256;
 
@@ -49,6 +52,12 @@ pub struct PipelineOptions {
 pub struct SourceSpec {
     pub source: Box<dyn AudioSource>,
     pub backpressure: Backpressure,
+}
+
+/// What the inference thread hands to the storage task.
+enum WorkerOutput {
+    Analysis(ChunkAnalysis),
+    SourceEnded(Arc<str>),
 }
 
 /// Counters at the end of a run.
@@ -147,7 +156,21 @@ impl Pipeline {
         }
 
         let queue = Arc::new(ChunkQueue::new(QUEUE_CAPACITY));
-        let (results_tx, results_rx) = mpsc::channel::<ChunkAnalysis>(RESULT_CHANNEL);
+        let (results_tx, results_rx) = mpsc::channel::<WorkerOutput>(RESULT_CHANNEL);
+        let (clip_tx, clip_rx) = mpsc::channel::<ClipMsg>(CLIP_CHANNEL);
+
+        // Chunkers exist before any task starts so the clip writer can read every ring buffer.
+        let mut rings = HashMap::new();
+        let mut prepared = Vec::with_capacity(sources.len());
+        for spec in sources {
+            let chunker = Chunker::new(
+                spec.source.id(),
+                cfg.detection.overlap_seconds,
+                cfg.audio.ring_buffer_seconds,
+            );
+            rings.insert(Arc::clone(chunker.source_id()), chunker.ring());
+            prepared.push((spec, chunker));
+        }
 
         let worker = {
             let queue = Arc::clone(&queue);
@@ -158,23 +181,30 @@ impl Pipeline {
                 .spawn(move || inference_worker(bundle, queue, results_tx, stats, tz))
                 .context("starting inference thread")?
         };
+        let clips = tokio::spawn(clip_task(
+            ClipSettings::from_config(&cfg),
+            rings,
+            Arc::clone(&store),
+            clip_rx,
+            Arc::clone(&stats),
+        ));
         let storage = tokio::spawn(storage_task(
             store,
             results_rx,
             detections,
             Arc::clone(&stats),
+            clip_tx,
         ));
 
         let sources_cancel = cancel.child_token();
         let mut tasks = JoinSet::new();
-        for spec in sources {
+        for (spec, chunker) in prepared {
             tasks.spawn(source_task(
                 spec,
+                chunker,
                 Arc::clone(&queue),
                 Arc::clone(&stats),
                 sources_cancel.child_token(),
-                cfg.detection.overlap_seconds,
-                cfg.audio.ring_buffer_seconds,
             ));
         }
 
@@ -207,6 +237,7 @@ impl Pipeline {
         queue.close_producers();
         let worker_result = tokio::task::spawn_blocking(move || worker.join()).await;
         let storage_result = storage.await;
+        let clips_result = clips.await;
 
         let summary = stats.snapshot();
         tracing::info!(
@@ -226,6 +257,7 @@ impl Pipeline {
             Err(e) => anyhow::bail!("waiting for inference thread: {e}"),
         }
         storage_result.context("storage task panicked")?;
+        clips_result.context("clip writer task panicked")?;
         Ok(summary)
     }
 }
@@ -233,11 +265,10 @@ impl Pipeline {
 /// Run one source and cut its frames into chunks for the queue.
 async fn source_task(
     spec: SourceSpec,
+    mut chunker: Chunker,
     queue: Arc<ChunkQueue>,
     stats: Arc<PipelineStats>,
     cancel: CancellationToken,
-    overlap_seconds: f32,
-    ring_buffer_seconds: f32,
 ) -> (String, Result<(), birdsong_audio::AudioError>) {
     let SourceSpec {
         source,
@@ -246,7 +277,6 @@ async fn source_task(
     let id = source.id().to_string();
     let (frames_tx, mut frames_rx) = mpsc::channel(FRAME_CHANNEL);
     let capture = tokio::spawn(source.run(frames_tx, cancel.clone()));
-    let mut chunker = Chunker::new(id.as_str(), overlap_seconds, ring_buffer_seconds);
     let source_id: Arc<str> = Arc::clone(chunker.source_id());
 
     let enqueue = |item: QueueItem| {
@@ -304,7 +334,7 @@ async fn source_task(
 fn inference_worker(
     mut bundle: ModelBundle,
     queue: Arc<ChunkQueue>,
-    results: mpsc::Sender<ChunkAnalysis>,
+    results: mpsc::Sender<WorkerOutput>,
     stats: Arc<PipelineStats>,
     tz: Tz,
 ) {
@@ -317,7 +347,9 @@ fn inference_worker(
         if analysis.masked {
             stats.chunk_masked();
         }
-        results.blocking_send(analysis).is_ok()
+        results
+            .blocking_send(WorkerOutput::Analysis(analysis))
+            .is_ok()
     };
 
     while let Some(item) = queue.pop() {
@@ -376,11 +408,24 @@ fn inference_worker(
                     }
                 }
             }
-            QueueItem::Gap(source_id) | QueueItem::End(source_id) => {
+            QueueItem::Gap(source_id) => {
                 if let Some(a) = masks.get_mut(&source_id).and_then(NeighbourMask::reset) {
                     if !emit(a) {
                         return;
                     }
+                }
+            }
+            QueueItem::End(source_id) => {
+                if let Some(a) = masks.get_mut(&source_id).and_then(NeighbourMask::reset) {
+                    if !emit(a) {
+                        return;
+                    }
+                }
+                if results
+                    .blocking_send(WorkerOutput::SourceEnded(source_id))
+                    .is_err()
+                {
+                    return;
                 }
             }
         }
@@ -394,20 +439,39 @@ fn inference_worker(
     }
 }
 
-/// Persist released detections, log them, and broadcast them with their ids.
+/// Persist released detections, log them, broadcast them with their ids, and queue their clip.
 async fn storage_task(
     store: Arc<dyn DetectionStore>,
-    mut results: mpsc::Receiver<ChunkAnalysis>,
+    mut results: mpsc::Receiver<WorkerOutput>,
     detections: broadcast::Sender<Detection>,
     stats: Arc<PipelineStats>,
+    clips: mpsc::Sender<ClipMsg>,
 ) {
-    while let Some(analysis) = results.recv().await {
-        if analysis.detections.is_empty() {
+    while let Some(output) = results.recv().await {
+        let analysis = match output {
+            WorkerOutput::SourceEnded(source) => {
+                let _ = clips.send(ClipMsg::SourceEnded(source)).await;
+                continue;
+            }
+            WorkerOutput::Analysis(analysis) => analysis,
+        };
+        let Some(best) = analysis.detections.first() else {
             continue;
-        }
+        };
+        let mut job = ClipJob {
+            ids: Vec::new(),
+            source_id: analysis.source_id.clone(),
+            start_at: analysis.start_at,
+            common_name: best.common_name.clone(),
+            confidence: best.confidence,
+        };
         match store.insert_many(&analysis.detections).await {
             Ok(ids) => {
                 stats.detections_stored(ids.len() as u64);
+                job.ids.clone_from(&ids);
+                if clips.send(ClipMsg::Job(job)).await.is_err() {
+                    tracing::warn!("clip writer stopped; clip not saved");
+                }
                 for (mut d, id) in analysis.detections.into_iter().zip(ids) {
                     d.id = Some(id);
                     tracing::info!(

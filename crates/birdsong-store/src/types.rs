@@ -161,6 +161,7 @@ pub struct SpeciesSummary {
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct StoredClip {
     pub clip_path: String,
+    pub spectrogram_path: Option<String>,
     pub bytes: u64,
     /// Latest detection time among rows using this clip.
     pub detected_at: DateTime<Utc>,
@@ -179,6 +180,7 @@ pub enum PurgeReason {
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct ClipToPurge {
     pub clip_path: String,
+    pub spectrogram_path: Option<String>,
     pub bytes: u64,
     pub detected_at: DateTime<Utc>,
     pub reason: PurgeReason,
