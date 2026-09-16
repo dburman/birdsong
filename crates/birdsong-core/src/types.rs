@@ -1,11 +1,13 @@
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 
-/// Audio sample rate the classifier expects.
+/// Capture sample rate: audio sources, the ring buffer, clips and uploads all use it. A classifier
+/// that needs another rate resamples its own window.
 pub const SAMPLE_RATE_HZ: u32 = 48_000;
-/// Length of one analysis window in seconds.
+/// BirdNET V2.4's analysis window in seconds. Other classifiers set their own through
+/// `Classifier::window_seconds`; this is also the shortest window any model may use.
 pub const CHUNK_SECONDS: f32 = 3.0;
-/// Samples per analysis window (`3 s × 48 kHz`).
+/// Samples in BirdNET V2.4's window (`3 s × 48 kHz`).
 pub const CHUNK_SAMPLES: usize = 144_000;
 
 /// One species detected in one analysis window.
@@ -13,7 +15,7 @@ pub const CHUNK_SAMPLES: usize = 144_000;
 pub struct Detection {
     /// Database id; `None` until stored.
     pub id: Option<i64>,
-    /// Start of the 3 s window, UTC.
+    /// Start of the analysis window, UTC.
     pub detected_at: DateTime<Utc>,
     pub scientific_name: String,
     pub common_name: String,

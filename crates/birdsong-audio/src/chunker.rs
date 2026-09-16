@@ -1,22 +1,19 @@
 use std::sync::{Arc, Mutex};
 
-use birdsong_core::{CHUNK_SAMPLES, CHUNK_SECONDS, SAMPLE_RATE_HZ};
+use birdsong_core::SAMPLE_RATE_HZ;
 use chrono::{DateTime, TimeDelta, Utc};
 
 use crate::frame::AudioFrame;
 use crate::ring::{lock_ring, RingBuffer, SharedRingBuffer};
 
-/// A trailing partial window shorter than this (1.5 s) is dropped (BirdNET `splitSignal` minlen).
-pub const MIN_TAIL_SAMPLES: usize = 72_000;
-
 /// Frames are fed to the ring buffer in pieces of this size, so chunks are cut before the
 /// samples they need can be overwritten, whatever the frame size.
 const PIECE_SAMPLES: usize = 4_800;
 
-/// One 3 s analysis window.
+/// One analysis window.
 #[derive(Clone, Debug, PartialEq)]
 pub struct Chunk {
-    /// Exactly [`CHUNK_SAMPLES`] mono 48 kHz samples.
+    /// Exactly [`Chunker::window_samples`] mono 48 kHz samples.
     pub samples: Arc<[f32]>,
     /// UTC time of the first sample.
     pub start_at: DateTime<Utc>,
@@ -37,10 +34,12 @@ pub enum ChunkerEvent {
     },
 }
 
-/// Cuts a stream of [`AudioFrame`]s into 3 s [`Chunk`]s, stepping by `3 s − overlap`, and keeps the
+/// Cuts a stream of [`AudioFrame`]s into windows of the classifier's length, stepping by
+/// `window − overlap`, and keeps the
 /// recent audio in a [`SharedRingBuffer`] for clip extraction.
 pub struct Chunker {
     source_id: Arc<str>,
+    window: usize,
     step: usize,
     ring: SharedRingBuffer,
     next_start: u64,
@@ -50,14 +49,22 @@ pub struct Chunker {
 }
 
 impl Chunker {
-    /// `buffer_seconds` sizes the ring buffer; it is raised to at least one chunk plus one piece.
-    pub fn new(source_id: impl Into<Arc<str>>, overlap_seconds: f32, buffer_seconds: f32) -> Self {
-        let min_capacity = CHUNK_SAMPLES + PIECE_SAMPLES;
+    /// `window_seconds` is the classifier's window (3 s for BirdNET V2.4). `buffer_seconds` sizes
+    /// the ring buffer; it is raised to at least one window plus one piece.
+    pub fn new(
+        source_id: impl Into<Arc<str>>,
+        window_seconds: f32,
+        overlap_seconds: f32,
+        buffer_seconds: f32,
+    ) -> Self {
+        let window = seconds_to_samples(window_seconds).max(1);
+        let min_capacity = window + PIECE_SAMPLES;
         let capacity =
             ((buffer_seconds.max(0.0) * SAMPLE_RATE_HZ as f32).ceil() as usize).max(min_capacity);
         Self {
             source_id: source_id.into(),
-            step: Self::step_samples(overlap_seconds),
+            window,
+            step: Self::step_samples(window_seconds, overlap_seconds),
             ring: Arc::new(Mutex::new(RingBuffer::new(capacity))),
             next_start: 0,
             started: false,
@@ -72,9 +79,20 @@ impl Chunker {
         self
     }
 
-    /// Samples between consecutive chunk starts: `(3 s − overlap) × 48 kHz`, at least 1.
-    pub fn step_samples(overlap_seconds: f32) -> usize {
-        (((CHUNK_SECONDS - overlap_seconds) * SAMPLE_RATE_HZ as f32).round() as usize).max(1)
+    /// Samples between consecutive chunk starts: `(window − overlap) × 48 kHz`, at least 1.
+    pub fn step_samples(window_seconds: f32, overlap_seconds: f32) -> usize {
+        seconds_to_samples(window_seconds - overlap_seconds).max(1)
+    }
+
+    /// Samples in one window.
+    pub fn window_samples(&self) -> usize {
+        self.window
+    }
+
+    /// A trailing partial window shorter than half a window is dropped (BirdNET `splitSignal`
+    /// minlen: 1.5 s of a 3 s window).
+    pub fn min_tail_samples(&self) -> usize {
+        self.window / 2
     }
 
     /// Handle for the clip writer.
@@ -122,11 +140,11 @@ impl Chunker {
 
         for piece in frame.samples.chunks(PIECE_SAMPLES) {
             ring.push(piece);
-            while ring.total_samples() >= self.next_start + CHUNK_SAMPLES as u64 {
+            while ring.total_samples() >= self.next_start + self.window as u64 {
                 let Some(samples) =
-                    ring.copy_range(self.next_start, self.next_start + CHUNK_SAMPLES as u64)
+                    ring.copy_range(self.next_start, self.next_start + self.window as u64)
                 else {
-                    // Unreachable with capacity >= CHUNK_SAMPLES + PIECE_SAMPLES; never loop forever.
+                    // Unreachable with capacity >= window + PIECE_SAMPLES; never loop forever.
                     tracing::error!(source = %self.source_id, "chunk no longer in ring buffer; skipping");
                     self.next_start = ring.total_samples();
                     break;
@@ -143,22 +161,22 @@ impl Chunker {
         events
     }
 
-    /// End of stream: emit trailing windows of at least 1.5 s, zero-padded to 3 s. The next
+    /// End of stream: emit trailing windows of at least half a window, zero-padded. The next
     /// [`Chunker::push`] starts a fresh stream.
     pub fn finish(&mut self) -> Vec<Chunk> {
         let ring = Arc::clone(&self.ring);
         let ring = lock_ring(&ring);
         let mut out = Vec::new();
         if self.started {
-            while ring.total_samples() >= self.next_start + MIN_TAIL_SAMPLES as u64 {
+            while ring.total_samples() >= self.next_start + self.min_tail_samples() as u64 {
                 let end = ring
                     .total_samples()
-                    .min(self.next_start + CHUNK_SAMPLES as u64);
+                    .min(self.next_start + self.window as u64);
                 let Some(mut samples) = ring.copy_range(self.next_start, end) else {
                     break;
                 };
-                let padded = samples.len() < CHUNK_SAMPLES;
-                samples.resize(CHUNK_SAMPLES, 0.0);
+                let padded = samples.len() < self.window;
+                samples.resize(self.window, 0.0);
                 out.push(Chunk {
                     samples: samples.into(),
                     start_at: ring.time_of(self.next_start),
@@ -173,9 +191,14 @@ impl Chunker {
     }
 }
 
+fn seconds_to_samples(seconds: f32) -> usize {
+    (f64::from(seconds.max(0.0)) * f64::from(SAMPLE_RATE_HZ)).round() as usize
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+    use birdsong_core::{CHUNK_SAMPLES, CHUNK_SECONDS};
     use chrono::TimeZone;
 
     fn t0() -> DateTime<Utc> {
@@ -211,7 +234,7 @@ mod tests {
 
     #[test]
     fn no_overlap_ten_seconds_gives_three_chunks() {
-        let mut c = Chunker::new("mic0", 0.0, 90.0);
+        let mut c = Chunker::new("mic0", CHUNK_SECONDS, 0.0, 90.0);
         let (chunks, gaps) = run(&mut c, frames(10.0, 4_800, t0()));
         assert_eq!(gaps, 0);
         assert_eq!(chunks.len(), 3);
@@ -231,7 +254,7 @@ mod tests {
 
     #[test]
     fn overlap_one_and_a_half_seconds_gives_five_chunks_plus_padded_tail() {
-        let mut c = Chunker::new("mic0", 1.5, 90.0);
+        let mut c = Chunker::new("mic0", CHUNK_SECONDS, 1.5, 90.0);
         let (chunks, _) = run(&mut c, frames(10.0, 4_800, t0()));
         assert_eq!(chunks.len(), 5);
         let starts: Vec<_> = chunks.iter().map(|ch| ch.samples[0] as usize).collect();
@@ -249,8 +272,8 @@ mod tests {
 
     #[test]
     fn frame_size_does_not_change_chunks() {
-        let mut a = Chunker::new("s", 0.5, 0.0); // minimum-size ring buffer
-        let mut b = Chunker::new("s", 0.5, 0.0);
+        let mut a = Chunker::new("s", CHUNK_SECONDS, 0.5, 0.0); // minimum-size ring buffer
+        let mut b = Chunker::new("s", CHUNK_SECONDS, 0.5, 0.0);
         let (ca, _) = run(&mut a, frames(20.0, 1_000, t0()));
         let (cb, _) = run(&mut b, frames(20.0, 20 * 48_000, t0())); // one frame larger than the ring
         assert_eq!(ca, cb);
@@ -259,7 +282,7 @@ mod tests {
 
     #[test]
     fn gap_resets_alignment() {
-        let mut c = Chunker::new("mic0", 0.0, 90.0);
+        let mut c = Chunker::new("mic0", CHUNK_SECONDS, 0.0, 90.0);
         let mut fs = frames(4.0, 4_800, t0());
         // Second stretch starts 10 s later than it should.
         fs.extend(frames(6.0, 4_800, t0() + TimeDelta::seconds(14)));
@@ -284,7 +307,7 @@ mod tests {
 
     #[test]
     fn small_jitter_is_not_a_gap() {
-        let mut c = Chunker::new("mic0", 0.0, 90.0);
+        let mut c = Chunker::new("mic0", CHUNK_SECONDS, 0.0, 90.0);
         let mut fs = frames(6.0, 4_800, t0());
         fs[30].captured_at += TimeDelta::milliseconds(200);
         let (chunks, gaps) = run(&mut c, fs);
@@ -294,8 +317,22 @@ mod tests {
     }
 
     #[test]
+    fn five_second_windows() {
+        let mut c = Chunker::new("mic0", 5.0, 1.0, 90.0);
+        assert_eq!(c.window_samples(), 240_000);
+        let (chunks, _) = run(&mut c, frames(14.0, 4_800, t0()));
+        let starts: Vec<_> = chunks.iter().map(|ch| ch.samples[0] as usize).collect();
+        assert_eq!(starts, [0, 192_000, 384_000], "4 s steps");
+        assert!(chunks.iter().all(|ch| ch.samples.len() == 240_000));
+        assert!(
+            c.finish().is_empty(),
+            "the 2 s left at 12 s is below half a window"
+        );
+    }
+
+    #[test]
     fn ring_buffer_is_shared() {
-        let mut c = Chunker::new("mic0", 0.0, 60.0);
+        let mut c = Chunker::new("mic0", CHUNK_SECONDS, 0.0, 60.0);
         let ring = c.ring();
         run(&mut c, frames(5.0, 4_800, t0()));
         let r = lock_ring(&ring);

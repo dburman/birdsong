@@ -164,11 +164,13 @@ impl Pipeline {
         let (clip_tx, clip_rx) = mpsc::channel::<ClipMsg>(CLIP_CHANNEL);
 
         // Chunkers exist before any task starts so the clip writer can read every ring buffer.
+        let window_seconds = bundle.classifier.window_seconds();
         let mut rings = HashMap::new();
         let mut prepared = Vec::with_capacity(sources.len());
         for spec in sources {
             let chunker = Chunker::new(
                 spec.source.id(),
+                window_seconds,
                 cfg.detection.overlap_seconds,
                 cfg.audio.ring_buffer_seconds,
             );
@@ -212,7 +214,7 @@ impl Pipeline {
             (None, None)
         };
         let clips = tokio::spawn(clip_task(
-            ClipSettings::from_config(&cfg),
+            ClipSettings::from_config(&cfg, window_seconds),
             rings,
             Arc::clone(&store),
             clip_rx,

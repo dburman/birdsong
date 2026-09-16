@@ -1,6 +1,6 @@
 use std::path::Path;
 
-use birdsong_core::CHUNK_SAMPLES;
+use birdsong_core::{CHUNK_SAMPLES, CHUNK_SECONDS, SAMPLE_RATE_HZ};
 use tract_onnx::prelude::*;
 
 use crate::mel::BirdnetV24Frontend;
@@ -9,11 +9,17 @@ use crate::ModelError;
 /// `model_id` recorded on every detection made with [`TractClassifier`].
 pub const BIRDNET_V24_MODEL_ID: &str = "birdnet-v2.4";
 
-/// A sound classifier: 3 s of 48 kHz mono audio in, one logit per class out.
+/// A sound classifier: one window of 48 kHz mono audio in, one logit per class out.
 pub trait Classifier: Send {
     fn model_id(&self) -> &str;
     fn num_classes(&self) -> usize;
-    /// `samples.len()` must equal [`CHUNK_SAMPLES`]. Returns one logit per class.
+    /// Length of the window the classifier analyses, in seconds of 48 kHz capture audio.
+    fn window_seconds(&self) -> f32;
+    /// Samples per window at the capture rate.
+    fn window_samples(&self) -> usize {
+        (f64::from(self.window_seconds()) * f64::from(SAMPLE_RATE_HZ)).round() as usize
+    }
+    /// `samples.len()` must equal [`Classifier::window_samples`]. Returns one logit per class.
     fn predict(&mut self, samples: &[f32]) -> Result<Vec<f32>, ModelError>;
 }
 
@@ -61,6 +67,10 @@ impl Classifier for TractClassifier {
 
     fn num_classes(&self) -> usize {
         self.num_classes
+    }
+
+    fn window_seconds(&self) -> f32 {
+        CHUNK_SECONDS
     }
 
     fn predict(&mut self, samples: &[f32]) -> Result<Vec<f32>, ModelError> {

@@ -12,7 +12,7 @@ use birdsong_audio::{
     flac, lock_ring, samples_to_delta, spectrogram, wav, SharedRingBuffer, SpectrogramOptions,
 };
 use birdsong_core::config::ClipFormat;
-use birdsong_core::{local_date_and_hour, sanitize_name, Config, CHUNK_SECONDS, SAMPLE_RATE_HZ};
+use birdsong_core::{local_date_and_hour, sanitize_name, Config, SAMPLE_RATE_HZ};
 use birdsong_store::{ClipInfo, DetectionStore};
 use chrono::{DateTime, TimeDelta, Utc};
 use chrono_tz::Tz;
@@ -26,16 +26,19 @@ use crate::stats::PipelineStats;
 pub struct ClipSettings {
     pub clips_dir: PathBuf,
     pub clip_seconds: f32,
+    /// The classifier's window; clips are centred on it.
+    pub window_seconds: f32,
     pub format: ClipFormat,
     pub spectrograms: bool,
     pub timezone: Tz,
 }
 
 impl ClipSettings {
-    pub fn from_config(cfg: &Config) -> Self {
+    pub fn from_config(cfg: &Config, window_seconds: f32) -> Self {
         Self {
             clips_dir: cfg.storage.clips_dir(),
             clip_seconds: cfg.storage.clip_seconds,
+            window_seconds,
             format: cfg.storage.clip_format,
             spectrograms: cfg.storage.spectrograms,
             timezone: cfg.station.timezone,
@@ -43,11 +46,16 @@ impl ClipSettings {
     }
 }
 
-/// Start and length of the clip for a chunk: `clip_seconds` (at least 3) centred on the 3 s window
-/// (BUILD_PLAN §7.7). The default 6 s adds 1.5 s either side.
-pub fn clip_window(chunk_start: DateTime<Utc>, clip_seconds: f32) -> (DateTime<Utc>, f32) {
-    let duration = clip_seconds.max(CHUNK_SECONDS);
-    let pad = (duration - CHUNK_SECONDS) / 2.0;
+/// Start and length of the clip for a chunk: `clip_seconds` (at least one window) centred on the
+/// analysis window (BUILD_PLAN §7.7). With BirdNET's 3 s window the default 6 s adds 1.5 s either
+/// side.
+pub fn clip_window(
+    chunk_start: DateTime<Utc>,
+    clip_seconds: f32,
+    window_seconds: f32,
+) -> (DateTime<Utc>, f32) {
+    let duration = clip_seconds.max(window_seconds);
+    let pad = (duration - window_seconds) / 2.0;
     (
         chunk_start - TimeDelta::microseconds((f64::from(pad) * 1e6).round() as i64),
         duration,
@@ -199,7 +207,8 @@ pub(crate) async fn clip_task(
             continue;
         };
 
-        let (start, duration) = clip_window(job.start_at, settings.clip_seconds);
+        let (start, duration) =
+            clip_window(job.start_at, settings.clip_seconds, settings.window_seconds);
         let needed_end = start
             + samples_to_delta((f64::from(duration) * f64::from(SAMPLE_RATE_HZ)).round() as u64);
         let deadline = Instant::now() + Duration::from_secs_f32(duration + 5.0);
@@ -259,6 +268,7 @@ pub(crate) async fn clip_task(
                             clip_samples,
                             clip_start_at,
                             chunk_start_at: job.start_at,
+                            window_seconds: settings.window_seconds,
                             detections: job.detections.clone(),
                         };
                         if tx.try_send(upload).is_err() {
@@ -299,6 +309,7 @@ mod tests {
         ClipSettings {
             clips_dir: dir.join("clips"),
             clip_seconds: 6.0,
+            window_seconds: 3.0,
             format,
             spectrograms: true,
             timezone: chrono_tz::UTC,
@@ -306,19 +317,32 @@ mod tests {
     }
 
     #[test]
+    fn longer_windows_are_centred_too() {
+        assert_eq!(
+            clip_window(t(30), 6.0, 5.0),
+            (t(30) - TimeDelta::milliseconds(500), 6.0)
+        );
+        assert_eq!(
+            clip_window(t(30), 3.0, 5.0),
+            (t(30), 5.0),
+            "never shorter than the window"
+        );
+    }
+
+    #[test]
     fn window_is_centred() {
         assert_eq!(
-            clip_window(t(30), 6.0),
+            clip_window(t(30), 6.0, 3.0),
             (t(30) - TimeDelta::milliseconds(1500), 6.0)
         );
-        assert_eq!(clip_window(t(30), 3.0), (t(30), 3.0));
+        assert_eq!(clip_window(t(30), 3.0, 3.0), (t(30), 3.0));
         assert_eq!(
-            clip_window(t(30), 1.0),
+            clip_window(t(30), 1.0, 3.0),
             (t(30), 3.0),
             "never shorter than the chunk"
         );
         assert_eq!(
-            clip_window(t(30), 10.0).0,
+            clip_window(t(30), 10.0, 3.0).0,
             t(30) - TimeDelta::milliseconds(3500)
         );
     }
@@ -358,12 +382,12 @@ mod tests {
         let mut ring = RingBuffer::with_seconds(90.0);
         ring.reset(t(0));
         ring.push(&vec![0.25; 20 * 48_000]);
-        let (start, duration) = clip_window(t(6), 6.0);
+        let (start, duration) = clip_window(t(6), 6.0, 3.0);
         assert_eq!(
             ring.extract(start, duration).unwrap().samples.len(),
             6 * 48_000
         );
-        let (start, duration) = clip_window(t(0), 6.0);
+        let (start, duration) = clip_window(t(0), 6.0, 3.0);
         let clamped = ring.extract(start, duration).unwrap();
         assert_eq!(
             clamped.samples.len(),
@@ -371,7 +395,7 @@ mod tests {
             "1.5 s before the recording started is not available"
         );
         assert_eq!(clamped.start_at, t(0));
-        let (start, duration) = clip_window(t(18), 6.0);
+        let (start, duration) = clip_window(t(18), 6.0, 3.0);
         assert_eq!(
             ring.extract(start, duration).unwrap().samples.len(),
             168_000,

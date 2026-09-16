@@ -135,6 +135,7 @@ fn job() -> UploadJob {
             .collect(),
         clip_start_at: clip_start,
         chunk_start_at: clip_start + TimeDelta::milliseconds(1500),
+        window_seconds: 3.0,
         detections: vec![
             (
                 "Poecile atricapillus".into(),

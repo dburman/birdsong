@@ -266,6 +266,8 @@ pub struct UploadJob {
     pub clip_samples: Vec<f32>,
     pub clip_start_at: DateTime<Utc>,
     pub chunk_start_at: DateTime<Utc>,
+    /// Length of the analysis window inside the clip.
+    pub window_seconds: f32,
     /// (scientific name, common name, confidence) for every detection of the window.
     pub detections: Vec<(String, String, f32)>,
 }
@@ -304,7 +306,7 @@ pub fn upload_window(
     let clip_seconds = job.clip_samples.len() as f64 / f64::from(SAMPLE_RATE_HZ);
     let start = ((job.chunk_start_at - job.clip_start_at).num_milliseconds() as f64 / 1000.0)
         .clamp(0.0, clip_seconds);
-    let end = (start + f64::from(birdsong_core::CHUNK_SECONDS)).min(clip_seconds);
+    let end = (start + f64::from(job.window_seconds)).min(clip_seconds);
 
     let mut result = WindowResult::default();
     for (scientific, common, confidence) in &job.detections {

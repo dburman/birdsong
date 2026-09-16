@@ -21,7 +21,7 @@ pub mod spectrogram;
 pub mod wav;
 mod wav_source;
 
-pub use chunker::{Chunk, Chunker, ChunkerEvent, MIN_TAIL_SAMPLES};
+pub use chunker::{Chunk, Chunker, ChunkerEvent};
 pub use error::AudioError;
 pub use ffmpeg::{ffmpeg_args, redact_text, redact_url, FfmpegOptions, FfmpegSource};
 pub use frame::{apply_gain, db_to_gain, delta_to_samples, samples_to_delta, AudioFrame};

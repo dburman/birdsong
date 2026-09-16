@@ -121,6 +121,7 @@ pub struct AnalysisReport {
     pub min_confidence: f32,
     pub top_n_per_chunk: usize,
     pub overlap_seconds: f32,
+    pub window_seconds: f32,
     pub privacy_filter: bool,
     pub min_detections: usize,
     pub confirmation_window_seconds: f32,
@@ -207,8 +208,10 @@ pub fn analyze_samples(
         )
     };
 
+    let window_seconds = bundle.classifier.window_seconds();
     let mut chunker = Chunker::new(
         "analyze",
+        window_seconds,
         cfg.detection.overlap_seconds,
         cfg.audio.ring_buffer_seconds,
     );
@@ -291,7 +294,7 @@ pub fn analyze_samples(
         rows.push(ChunkReport {
             index,
             start_seconds: start,
-            end_seconds: (start + 3.0).min(duration),
+            end_seconds: (start + f64::from(window_seconds)).min(duration),
             padded: chunk.padded,
             human_present: analysis.human_present,
             masked: false,
@@ -368,6 +371,7 @@ pub fn analyze_samples(
         min_confidence: bundle.postprocess.min_confidence,
         top_n_per_chunk: bundle.postprocess.top_n_per_chunk,
         overlap_seconds: cfg.detection.overlap_seconds,
+        window_seconds,
         privacy_filter: privacy,
         min_detections: cfg.detection.min_detections,
         confirmation_window_seconds: cfg.detection.confirmation_window_seconds,

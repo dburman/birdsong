@@ -128,7 +128,7 @@ async fn chunker_on_fixture_matches_direct_slices() {
     let (res, frames, _) = collect(Box::new(src), None).await;
     res.unwrap();
 
-    let mut chunker = Chunker::new("f", 0.0, 90.0);
+    let mut chunker = Chunker::new("f", birdsong_core::CHUNK_SECONDS, 0.0, 90.0);
     let mut chunks = Vec::new();
     for f in frames {
         for e in chunker.push(f) {
