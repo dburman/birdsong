@@ -3,6 +3,7 @@
 //! Uses the ONNX export with the in-graph DFT replaced by matrix multiplication (`*_no_dft_fp32`),
 //! which tract can run. See `docs/MODEL.md` for provenance, outputs and checksums.
 
+use std::collections::HashMap;
 use std::path::Path;
 use std::sync::Arc;
 
@@ -33,7 +34,22 @@ impl PerchClassifier {
     pub fn load(path: &Path) -> Result<Self, ModelError> {
         let model = tract_onnx::onnx()
             .model_for_path(path)
-            .and_then(|m| m.with_input_fact(0, f32::fact([1, INPUT_SAMPLES]).into()))
+            .and_then(|m| m.into_typed())
+            .and_then(|m| {
+                // The batch size is a symbol used by the input and, in the full model, by internal
+                // reshapes too, so it is substituted everywhere rather than on the input alone.
+                let batch = m.symbols.sym("batch");
+                m.set_symbols(&HashMap::from([(batch, TDim::Val(1))]))
+            })
+            .and_then(|m| {
+                let input = m.input_fact(0)?.shape.as_concrete().map(<[usize]>::to_vec);
+                anyhow::ensure!(
+                    input.as_deref() == Some(&[1, INPUT_SAMPLES][..]),
+                    "expected input shape [1, {INPUT_SAMPLES}], found {:?}",
+                    m.input_fact(0)?.shape
+                );
+                Ok(m)
+            })
             .and_then(|m| m.into_optimized())
             .and_then(|m| m.into_runnable())
             .map_err(|e| ModelError::model(path, e))?;

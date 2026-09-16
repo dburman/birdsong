@@ -69,3 +69,40 @@ common_names = "labels/en_us.txt"
 
     assert!(bundle.classifier.predict(&audio[..144_000]).is_err());
 }
+
+/// The full 14 795-class model uses a symbolic batch size inside the graph as well. Run with
+/// `cargo test --release -p birdsong-model --test perch_v2 -- --ignored` after
+/// `scripts/fetch-perch.sh full`.
+#[test]
+#[ignore = "needs the 413 MB full model; slow in debug builds"]
+fn full_perch_model_loads_and_hears_the_chickadee() {
+    let models = repo_root().join("models");
+    let cfg = Config::from_toml(&format!(
+        r#"
+[[audio.sources]]
+id = "file0"
+kind = "file"
+path = "unused.wav"
+[model]
+dir = {dir:?}
+kind = "perch-v2"
+classifier = "perch/perch_v2_no_dft_fp32.onnx"
+labels = "perch/perch_v2_labels.txt"
+common_names = "labels/en_us.txt"
+"#,
+        dir = models.display().to_string(),
+    ))
+    .unwrap();
+    let mut bundle = ModelBundle::load(&cfg).unwrap();
+    assert_eq!(bundle.classifier.num_classes(), 14_795);
+    assert_eq!(bundle.labels.len(), 14_795);
+    let logits = bundle
+        .classifier
+        .predict(&fixture_48k()[..240_000])
+        .unwrap();
+    let (best, _) = top_scores(&logits, &bundle.postprocess, 1)[0];
+    assert_eq!(
+        bundle.labels.get(best).unwrap().scientific,
+        "Poecile atricapillus"
+    );
+}

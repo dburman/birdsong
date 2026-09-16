@@ -35,8 +35,10 @@ only curl:
 scripts/fetch-perch.sh north-america-east
 ```
 
-Use a regional model on a Pi (the script lists how to find the others; `full` is 413 MB and needs
-about 700 MB of memory). The script prints the `[model]` settings to use. Perch analyses 5 second
+On a Pi 4 a regional model analyses a 5 second window in about 1.7 s on one core using 245 MiB;
+`full` (413 MB) takes about 2.7 s and 1.1 GB, so it needs a Pi with 2 GB or more. A regional model
+can miss local species (see `docs/MODEL.md`); with enough memory, `full` plus
+`model.species_list` is the more complete choice. The script prints the `[model]` settings to use. Perch analyses 5 second
 windows, its confidences are lower than BirdNET's (start with `detection.min_confidence = 0.3`),
 the location filter does not apply, and BirdWeather uploads are turned off. Keep
 `scripts/fetch-models.sh` too if you want English common names from the BirdNET labels.
@@ -163,8 +165,9 @@ curl -s http://localhost:8080/api/v1/health
 - `chunks_dropped` should stay at 0. If it grows, the Pi cannot keep up: set
   `detection.overlap_seconds = 0`, disable `storage.spectrograms`, or use a faster Pi.
 
-Single-stream inference on the development machine takes about 25 ms per window; expect roughly
-10 to 20 times that on a Pi 4 and less on a Pi 5. These Pi figures are estimates until measured.
+Single-stream inference takes about 25 ms per window on the development machine and **224 ms on
+a Raspberry Pi 4** (one core, measured), so a Pi 4 keeps up about 13 times over. A Pi 5 should be
+faster still.
 
 ## Monitoring
 

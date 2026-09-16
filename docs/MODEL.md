@@ -103,11 +103,13 @@ Reference: `audio-model.tflite` run with the TensorFlow Lite interpreter on `sou
 | Apple M-series (macOS, aarch64) | 5.0 ms | 19.0 ms | 24 ms | 3 000 ms |
 | Same chip, linux/arm64 Docker | 4.0 ms | 23.0 ms | 27 ms | 3 000 ms |
 | Raspberry Pi 5 | — | — | **pending hardware** | 1 000 ms target |
-| Raspberry Pi 4 | — | — | **pending hardware** | 2 500 ms target |
+| Raspberry Pi 4 Model B (8 GB), one core, 2026-09-16 | — | — | **224 ms** | 2 500 ms target |
 
 For comparison the TFLite interpreter (XNNPACK) needs 18.8 ms per chunk on the same Mac, so tract
-is at parity. A Pi 4 core is very roughly 10–20× slower than an M-series core; the expected
-0.3–0.6 s per chunk is comfortably inside budget, but this **must be measured** (Step 10).
+is at parity. The Pi 4 figure was measured with `birdsong analyze` pinned to one core (`taskset`)
+on 3 minutes of recorded audio, while the Pi was also running BirdNET-Pi: 13× faster than real
+time, 209 MiB peak memory, 1.2 s to load the model and analyse the first window. A Pi 4 core is
+about 9× slower than an M-series core here.
 
 ## Perch v2 (optional classifier, `model.kind = "perch-v2"`)
 
@@ -146,10 +148,49 @@ supported.
 | Inference one window | ~100 ms (5 s of audio: about 50× faster than real time) |
 | `birdsong analyze` on the 15 s fixture | 1.07 s wall clock, 265 MB peak memory |
 
-Per second of audio Perch costs about 2.5× BirdNET V2.4. Scaling by the same 10–20× Pi 4 factor
-as above gives roughly 1–2.5 s per 5 s window: inside the budget for one source on a Pi 4, with
-more headroom on a Pi 5. **Not yet measured on a Pi.** Prefer a regional slice there; the full
-model needs about 700 MB of memory.
+Per second of audio Perch costs about 2.5× BirdNET V2.4 on the Mac.
+
+**Raspberry Pi 4 Model B (8 GB)**, one core, same method as the BirdNET row above:
+
+| Model | Per 5 s window | Faster than real time | Peak memory | Load + first window |
+|-------|---------------:|----------------------:|------------:|--------------------:|
+| `north-america-east` (999 classes) | 1 698 ms | 2.9× | 245 MiB | 7.1 s |
+| `full` (14 795 classes) | 2 660 ms | 1.9× | 1 142 MiB | 14.5 s |
+
+Both keep up with one source on one core. The full model uses about a gigabyte, so it needs a Pi
+with at least 2 GB; the regional slice fits in 1 GB. The Pi reached 70 °C without throttling.
+
+The full model's graph also uses the symbolic batch size inside internal reshapes, so the loader
+substitutes `batch = 1` throughout the model rather than only fixing the input shape.
+
+### Comparison with a BirdNET-Pi station (2026-09-16)
+
+317 saved 6 s clips (up to 6 per species, 67 species) from a BirdNET-Pi station in the northern
+United States running BirdNET V2.4 FP16 at confidence 0.7 and sensitivity 1.25. For BirdNET, the
+exact 3 s window BirdNET-Pi scored was analysed; for Perch, the 5 s centred on it. BirdNET-Pi's
+detections are not ground truth: a disagreement can be either model's mistake.
+
+| Classifier | BirdNET-Pi's species ranked 1st | In top 3 | Confidence for that species |
+|------------|--------------------------------:|---------:|-----------------------------|
+| Birdsong, BirdNET V2.4 (FP32) | **317 / 317** | 317 / 317 | median difference from BirdNET-Pi 0.0004, all but one within 0.01, max 0.036 (FP16 vs FP32) |
+| Perch v2 `north-america-east` | 255 (80 %) | 289 (91 %) | median 0.79 |
+| Perch v2 `full`, no species filter | 255 (80 %) | 291 (92 %) | median 0.68 |
+| Perch v2 `full` + the 227 species BirdNET's location model allows there year-round (`model.species_list`) | 262 (83 %) | 298 (94 %) | median 0.68 |
+
+- **Regional slices can miss local species.** Hairy Woodpecker (*Dryobates villosus*), common at
+  the station, is not in the `north-america-east` slice, so that model can never report it. The
+  full model with a species list avoids this.
+- Without a species filter the full model's top pick was sometimes a species that does not occur
+  there (Goldcrest, Australian King-Parrot, Jackdaw, Eurasian Dotterel); a species list removes
+  those.
+- The remaining disagreements are mostly between similar species: Yellow-throated Vireo,
+  Yellow-bellied Flycatcher and American Redstart heard as Red-eyed Vireo; American Crow as Common
+  Raven; Black-throated Green Warbler as Eastern Wood-Pewee. Listening to those clips is the only
+  way to tell which model is right.
+- Thresholds: of the clips BirdNET-Pi reported at ≥ 0.7, Perch `full` gives the same species at
+  least 0.3 for 75 % and at least 0.5 for 62 %; the regional slice, whose softmax covers fewer
+  classes, 79 % and 69 %. This measures agreement with BirdNET, not precision; choosing a
+  threshold for precision needs labelled recordings.
 
 ## BirdNET V3.0 (evaluated, not adopted yet)
 
