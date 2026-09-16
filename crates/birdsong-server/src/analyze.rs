@@ -14,8 +14,8 @@ use birdsong_audio::{
 use birdsong_core::config::{AudioSourceConfig, AudioSourceKind, ModelConfig};
 use birdsong_core::{week_of_year, Config, SAMPLE_RATE_HZ, YEAR_ROUND_WEEK};
 use birdsong_model::{
-    analyze_chunk, top_scores, ChunkContext, ModelBundle, NeighbourMask, SpeciesFilter,
-    SpeciesFilterKind,
+    analyze_chunk_with, top_scores, ChunkContext, Confirmer, DynamicThresholds, ModelBundle,
+    NeighbourMask, SpeciesFilter, SpeciesFilterKind,
 };
 use chrono::{DateTime, NaiveDate, NaiveTime, TimeDelta, TimeZone, Utc};
 use serde::Serialize;
@@ -122,6 +122,9 @@ pub struct AnalysisReport {
     pub top_n_per_chunk: usize,
     pub overlap_seconds: f32,
     pub privacy_filter: bool,
+    pub min_detections: usize,
+    pub confirmation_window_seconds: f32,
+    pub dynamic_threshold: bool,
     pub duration_seconds: f64,
     pub chunks: Vec<ChunkReport>,
     /// Species that would be reported, most detections first.
@@ -227,6 +230,14 @@ pub fn analyze_samples(
     let privacy = bundle.postprocess.privacy_filter;
     let model_id = bundle.classifier.model_id().to_string();
 
+    let mut dynamic = cfg.detection.dynamic_threshold.then(|| {
+        DynamicThresholds::new(
+            cfg.detection.min_confidence,
+            cfg.detection.dynamic_threshold_trigger,
+            cfg.detection.dynamic_threshold_min,
+            TimeDelta::hours(i64::from(cfg.detection.dynamic_threshold_hours)),
+        )
+    });
     let mut rows = Vec::with_capacity(chunks.len());
     let mut released = Vec::with_capacity(chunks.len());
     let mut mask = NeighbourMask::new();
@@ -256,7 +267,26 @@ pub fn analyze_samples(
             source_id: "analyze".into(),
             model_id: model_id.clone(),
         };
-        let analysis = analyze_chunk(&logits, &bundle.labels, &filter, &bundle.postprocess, &ctx);
+        let start_at = chunk.start_at;
+        let threshold_for = |i: usize| match (&dynamic, bundle.labels.get(i)) {
+            (Some(d), Some(label)) => d.threshold_for(&label.scientific, start_at),
+            _ => bundle.postprocess.min_confidence,
+        };
+        let analysis = analyze_chunk_with(
+            &logits,
+            &bundle.labels,
+            &filter,
+            &bundle.postprocess,
+            &ctx,
+            &threshold_for,
+        );
+        if let Some(d) = dynamic.as_mut() {
+            if !analysis.human_present {
+                for det in &analysis.detections {
+                    d.observe(&det.scientific_name, det.confidence, start_at);
+                }
+            }
+        }
         let start = seconds(chunk.start_at - base);
         rows.push(ChunkReport {
             index,
@@ -277,6 +307,21 @@ pub fn analyze_samples(
     if privacy {
         released.extend(mask.flush());
     }
+    // Confirmation releases every analysis exactly once and in order, so the rows still line up.
+    let released = if cfg.detection.min_detections > 1 {
+        let window = TimeDelta::milliseconds(
+            (cfg.detection.confirmation_window_seconds * 1000.0).round() as i64,
+        );
+        let mut confirmer = Confirmer::new(cfg.detection.min_detections, window);
+        let mut settled = Vec::with_capacity(released.len());
+        for a in released {
+            settled.extend(confirmer.push(a));
+        }
+        settled.extend(confirmer.flush());
+        settled
+    } else {
+        released
+    };
 
     let mut species: BTreeMap<String, SpeciesCount> = BTreeMap::new();
     for (row, analysis) in rows.iter_mut().zip(released) {
@@ -324,6 +369,9 @@ pub fn analyze_samples(
         top_n_per_chunk: bundle.postprocess.top_n_per_chunk,
         overlap_seconds: cfg.detection.overlap_seconds,
         privacy_filter: privacy,
+        min_detections: cfg.detection.min_detections,
+        confirmation_window_seconds: cfg.detection.confirmation_window_seconds,
+        dynamic_threshold: cfg.detection.dynamic_threshold,
         duration_seconds: duration,
         chunks: rows,
         summary,

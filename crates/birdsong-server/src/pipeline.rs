@@ -12,13 +12,14 @@ use std::time::Instant;
 
 use anyhow::Context;
 use birdsong_audio::{AudioSource, Chunker, ChunkerEvent, FfmpegOptions, FfmpegSource};
-use birdsong_core::config::AudioSourceKind;
+use birdsong_core::config::{AudioSourceKind, DetectionConfig};
 use birdsong_core::{local_date_and_hour, week_of_year, Config, Detection};
 use birdsong_model::{
-    analyze_chunk, ChunkAnalysis, ChunkContext, ModelBundle, NeighbourMask, SpeciesFilter,
+    analyze_chunk_with, ChunkAnalysis, ChunkContext, Confirmer, DynamicThresholds, ModelBundle,
+    NeighbourMask, SpeciesFilter,
 };
 use birdsong_store::DetectionStore;
-use chrono::Utc;
+use chrono::{TimeDelta, Utc};
 use chrono_tz::Tz;
 use tokio::sync::{broadcast, mpsc};
 use tokio::task::JoinSet;
@@ -179,9 +180,10 @@ impl Pipeline {
             let queue = Arc::clone(&queue);
             let stats = Arc::clone(&stats);
             let tz = cfg.station.timezone;
+            let detection = cfg.detection.clone();
             std::thread::Builder::new()
                 .name("inference".into())
-                .spawn(move || inference_worker(bundle, queue, results_tx, stats, tz))
+                .spawn(move || inference_worker(bundle, queue, results_tx, stats, detection, tz))
                 .context("starting inference thread")?
         };
         let (upload_tx, uploads) = if cfg.birdweather.enabled() {
@@ -223,6 +225,7 @@ impl Pipeline {
             detections,
             Arc::clone(&stats),
             clip_tx,
+            cfg.detection.clone(),
         ));
 
         let sources_cancel = cancel.child_token();
@@ -372,10 +375,20 @@ fn inference_worker(
     queue: Arc<ChunkQueue>,
     results: mpsc::Sender<WorkerOutput>,
     stats: Arc<PipelineStats>,
+    detection: DetectionConfig,
     tz: Tz,
 ) {
     let _guard = ConsumerGuard(Arc::clone(&queue));
     let privacy = bundle.postprocess.privacy_filter;
+    // Off unless configured: every species keeps `detection.min_confidence`.
+    let mut dynamic = detection.dynamic_threshold.then(|| {
+        DynamicThresholds::new(
+            detection.min_confidence,
+            detection.dynamic_threshold_trigger,
+            detection.dynamic_threshold_min,
+            TimeDelta::hours(i64::from(detection.dynamic_threshold_hours)),
+        )
+    });
     let mut masks: HashMap<Arc<str>, NeighbourMask> = HashMap::new();
     let mut filter: Option<(i32, SpeciesFilter)> = None;
 
@@ -428,8 +441,26 @@ fn inference_worker(
                     source_id: chunk.source_id.to_string(),
                     model_id: bundle.classifier.model_id().to_string(),
                 };
-                let analysis =
-                    analyze_chunk(&logits, &bundle.labels, species, &bundle.postprocess, &ctx);
+                let start_at = chunk.start_at;
+                let threshold_for = |i: usize| match (&dynamic, bundle.labels.get(i)) {
+                    (Some(d), Some(label)) => d.threshold_for(&label.scientific, start_at),
+                    _ => bundle.postprocess.min_confidence,
+                };
+                let analysis = analyze_chunk_with(
+                    &logits,
+                    &bundle.labels,
+                    species,
+                    &bundle.postprocess,
+                    &ctx,
+                    &threshold_for,
+                );
+                if let Some(d) = dynamic.as_mut() {
+                    if !analysis.human_present {
+                        for det in &analysis.detections {
+                            d.observe(&det.scientific_name, det.confidence, start_at);
+                        }
+                    }
+                }
                 let released = if privacy {
                     masks
                         .entry(Arc::clone(&chunk.source_id))
@@ -485,66 +516,116 @@ fn inference_worker(
 }
 
 /// Persist released detections, log them, broadcast them with their ids, and queue their clip.
+///
+/// With `detection.min_detections > 1` each source keeps a [`Confirmer`], so a species is stored
+/// only once it has been heard repeatedly inside the window; its earlier hits are then stored too.
 async fn storage_task(
     store: Arc<dyn DetectionStore>,
     mut results: mpsc::Receiver<WorkerOutput>,
     detections: broadcast::Sender<Detection>,
     stats: Arc<PipelineStats>,
     clips: mpsc::Sender<ClipMsg>,
+    detection: DetectionConfig,
 ) {
+    let confirming = detection.min_detections > 1;
+    let window =
+        TimeDelta::milliseconds((detection.confirmation_window_seconds * 1000.0).round() as i64);
+    // Per source: its confirmer and the discard count already reported to `stats`.
+    let mut confirmers: HashMap<String, (Confirmer, u64)> = HashMap::new();
+
     while let Some(output) = results.recv().await {
         let analysis = match output {
             WorkerOutput::SourceEnded(source) => {
+                if let Some((mut confirmer, reported)) = confirmers.remove(source.as_ref()) {
+                    let flushed = confirmer.flush();
+                    stats.detections_unconfirmed(confirmer.discarded() - reported);
+                    for a in flushed {
+                        store_analysis(&store, &detections, &stats, &clips, a).await;
+                    }
+                }
                 let _ = clips.send(ClipMsg::SourceEnded(source)).await;
                 continue;
             }
             WorkerOutput::Analysis(analysis) => analysis,
         };
-        let Some(best) = analysis.detections.first() else {
+        if !confirming {
+            store_analysis(&store, &detections, &stats, &clips, analysis).await;
             continue;
-        };
-        let mut job = ClipJob {
-            ids: Vec::new(),
-            source_id: analysis.source_id.clone(),
-            start_at: analysis.start_at,
-            common_name: best.common_name.clone(),
-            confidence: best.confidence,
-            detections: analysis
-                .detections
-                .iter()
-                .map(|d| {
-                    (
-                        d.scientific_name.clone(),
-                        d.common_name.clone(),
-                        d.confidence,
-                    )
-                })
-                .collect(),
-        };
-        match insert_with_retry(store.as_ref(), &analysis.detections).await {
-            Ok(ids) => {
-                stats.detections_stored(ids.len() as u64);
-                job.ids.clone_from(&ids);
-                if clips.send(ClipMsg::Job(job)).await.is_err() {
-                    tracing::warn!("clip writer stopped; clip not saved");
-                }
-                for (mut d, id) in analysis.detections.into_iter().zip(ids) {
-                    d.id = Some(id);
-                    tracing::info!(
-                        species = ?d.common_name,
-                        conf = %format_args!("{:.2}", d.confidence),
-                        source = %d.source_id,
-                        id,
-                        "detection"
-                    );
-                    // No subscribers is fine.
-                    let _ = detections.send(d);
-                }
+        }
+        let entry = confirmers
+            .entry(analysis.source_id.clone())
+            .or_insert_with(|| (Confirmer::new(detection.min_detections, window), 0));
+        let released = entry.0.push(analysis);
+        let discarded = entry.0.discarded();
+        stats.detections_unconfirmed(discarded - entry.1);
+        entry.1 = discarded;
+        for a in released {
+            store_analysis(&store, &detections, &stats, &clips, a).await;
+        }
+    }
+
+    // The queue closed without an End marker (shutdown): settle what is still held.
+    for (_, (mut confirmer, reported)) in std::mem::take(&mut confirmers) {
+        let flushed = confirmer.flush();
+        stats.detections_unconfirmed(confirmer.discarded() - reported);
+        for a in flushed {
+            store_analysis(&store, &detections, &stats, &clips, a).await;
+        }
+    }
+}
+
+/// Store one settled analysis. Confirmation can empty it, in which case nothing is stored.
+async fn store_analysis(
+    store: &Arc<dyn DetectionStore>,
+    detections: &broadcast::Sender<Detection>,
+    stats: &PipelineStats,
+    clips: &mpsc::Sender<ClipMsg>,
+    analysis: ChunkAnalysis,
+) {
+    let Some(best) = analysis.detections.first() else {
+        return;
+    };
+    let mut job = ClipJob {
+        ids: Vec::new(),
+        source_id: analysis.source_id.clone(),
+        start_at: analysis.start_at,
+        common_name: best.common_name.clone(),
+        confidence: best.confidence,
+        detections: analysis
+            .detections
+            .iter()
+            .map(|d| {
+                (
+                    d.scientific_name.clone(),
+                    d.common_name.clone(),
+                    d.confidence,
+                )
+            })
+            .collect(),
+    };
+    match insert_with_retry(store.as_ref(), &analysis.detections).await {
+        Ok(ids) => {
+            stats.detections_stored(ids.len() as u64);
+            job.ids.clone_from(&ids);
+            if clips.send(ClipMsg::Job(job)).await.is_err() {
+                tracing::warn!("clip writer stopped; clip not saved");
             }
-            Err(e) => {
-                stats.store_error();
-                tracing::error!(error = %e, count = analysis.detections.len(), "failed to store detections");
+            for (mut d, id) in analysis.detections.into_iter().zip(ids) {
+                d.id = Some(id);
+                tracing::info!(
+                    species = ?d.common_name,
+                    conf = %format_args!("{:.2}", d.confidence),
+                    source = %d.source_id,
+                    id,
+                    "detection"
+                );
+                // No subscribers is fine.
+                let _ = detections.send(d);
             }
+        }
+        Err(e) => {
+            stats.store_error();
+            tracing::error!(error = %e, count = analysis.detections.len(), "failed to store detections");
         }
     }
 }

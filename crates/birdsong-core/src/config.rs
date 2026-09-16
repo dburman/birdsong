@@ -129,6 +129,19 @@ pub struct DetectionConfig {
     pub privacy_filter: bool,
     /// Percent `0..=100`; higher looks deeper into the ranking for human classes.
     pub privacy_threshold: f32,
+    /// Detections of a species needed within `confirmation_window_seconds` before any are
+    /// stored. `1` stores every detection immediately (BirdNET-Pi behaviour).
+    pub min_detections: usize,
+    /// How long detections of one species count towards `min_detections`.
+    pub confirmation_window_seconds: f32,
+    /// Lower a species' threshold for a while after it has been heard clearly.
+    pub dynamic_threshold: bool,
+    /// Confidence that counts as "heard clearly".
+    pub dynamic_threshold_trigger: f32,
+    /// Lowest threshold a species can reach.
+    pub dynamic_threshold_min: f32,
+    /// How long the lowered threshold lasts, in hours.
+    pub dynamic_threshold_hours: u32,
 }
 
 impl Default for DetectionConfig {
@@ -143,6 +156,12 @@ impl Default for DetectionConfig {
             exclude_species: Vec::new(),
             privacy_filter: true,
             privacy_threshold: 0.0,
+            min_detections: 1,
+            confirmation_window_seconds: 15.0,
+            dynamic_threshold: false,
+            dynamic_threshold_trigger: 0.9,
+            dynamic_threshold_min: 0.2,
+            dynamic_threshold_hours: 24,
         }
     }
 }
@@ -440,6 +459,51 @@ impl Config {
             ));
         }
 
+        if !(1..=20).contains(&d.min_detections) {
+            errors.push(format!(
+                "detection.min_detections {} not in 1..=20",
+                d.min_detections
+            ));
+        }
+        if !(crate::CHUNK_SECONDS..=600.0).contains(&d.confirmation_window_seconds) {
+            errors.push(format!(
+                "detection.confirmation_window_seconds {} not in 3..=600",
+                d.confirmation_window_seconds
+            ));
+        }
+        if d.min_detections > 1
+            && self.audio.ring_buffer_seconds
+                < d.confirmation_window_seconds + self.storage.clip_seconds
+        {
+            errors.push(format!(
+                "audio.ring_buffer_seconds {} must be at least detection.confirmation_window_seconds + \
+                 storage.clip_seconds ({}) so clips can still be cut for confirmed detections",
+                self.audio.ring_buffer_seconds,
+                d.confirmation_window_seconds + self.storage.clip_seconds
+            ));
+        }
+        if !(0.0..=1.0).contains(&d.dynamic_threshold_trigger) {
+            errors.push(format!(
+                "detection.dynamic_threshold_trigger {} not in 0..=1",
+                d.dynamic_threshold_trigger
+            ));
+        }
+        if !(0.0..=1.0).contains(&d.dynamic_threshold_min) {
+            errors.push(format!(
+                "detection.dynamic_threshold_min {} not in 0..=1",
+                d.dynamic_threshold_min
+            ));
+        }
+        if d.dynamic_threshold && d.dynamic_threshold_trigger <= d.min_confidence {
+            errors.push(format!(
+                "detection.dynamic_threshold_trigger {} must be above detection.min_confidence {}",
+                d.dynamic_threshold_trigger, d.min_confidence
+            ));
+        }
+        if d.dynamic_threshold_hours == 0 {
+            errors.push("detection.dynamic_threshold_hours must be at least 1".into());
+        }
+
         if self.model.classifier.is_empty() || self.model.labels.is_empty() {
             errors.push("model.classifier and model.labels must be set".into());
         }
@@ -600,6 +664,37 @@ device = "hw:1,0"
             .unwrap_err()
             .to_string();
         assert!(err.contains("birdweather.token"), "{err}");
+    }
+
+    #[test]
+    fn detection_quality_options_are_off_by_default_and_validated() {
+        let cfg = Config::from_toml(MINIMAL).unwrap();
+        assert_eq!(cfg.detection.min_detections, 1);
+        assert!(!cfg.detection.dynamic_threshold);
+
+        let bad = |extra: &str| {
+            Config::from_toml(&format!("{MINIMAL}\n{extra}"))
+                .unwrap_err()
+                .to_string()
+        };
+        assert!(bad("[detection]\nmin_detections = 0").contains("min_detections"));
+        assert!(
+            bad("[detection]\nconfirmation_window_seconds = 1.0").contains("confirmation_window")
+        );
+        assert!(
+            bad("[detection]\ndynamic_threshold = true\ndynamic_threshold_trigger = 0.5")
+                .contains("must be above detection.min_confidence")
+        );
+        // Repeat confirmation needs enough buffered audio to still cut a clip afterwards.
+        assert!(
+            bad("[detection]\nmin_detections = 2\nconfirmation_window_seconds = 90.0")
+                .contains("ring_buffer_seconds")
+        );
+        let ok = Config::from_toml(&format!(
+            "{MINIMAL}\n[detection]\nmin_detections = 2\n[audio]\nring_buffer_seconds = 90.0"
+        ))
+        .unwrap();
+        assert_eq!(ok.detection.min_detections, 2);
     }
 
     #[test]

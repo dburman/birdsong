@@ -158,6 +158,13 @@ pub async fn metrics(State(state): State<AppState>) -> ApiResult<Response> {
     );
     metric(
         &mut out,
+        "birdsong_unconfirmed_detections_total",
+        "counter",
+        "Detections dropped because their species was never confirmed.",
+        s.unconfirmed_detections,
+    );
+    metric(
+        &mut out,
         "birdsong_clip_bytes",
         "gauge",
         "Disk used by saved clips and spectrograms.",

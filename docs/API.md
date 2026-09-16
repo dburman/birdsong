@@ -92,7 +92,7 @@ curl -s "$PI/api/v1/health"
   "seconds_since_last_chunk": 3.1,
   "stats": {
     "chunks_processed": 1200, "chunks_dropped": 0, "masked_chunks": 4, "gaps": 0,
-    "detections": 57, "inference_errors": 0, "store_errors": 0,
+    "detections": 57, "unconfirmed_detections": 0, "inference_errors": 0, "store_errors": 0,
     "clips_written": 41, "clip_errors": 0, "mean_inference_ms": 312.5,
     "last_chunk_at": "2026-05-15T10:59:57.000000Z",
     "last_processed_at": "2026-05-15T11:00:00.300000Z"
@@ -102,7 +102,9 @@ curl -s "$PI/api/v1/health"
 
 `last_chunk_at` is the audio time of the newest analysed chunk; `seconds_since_last_chunk` is
 measured from when it was processed (wall clock). A growing `seconds_since_last_chunk` means audio stopped arriving; a growing `chunks_dropped`
-means the computer cannot keep up with inference.
+means the computer cannot keep up with inference. `unconfirmed_detections` counts detections
+dropped because their species never repeated inside `detection.confirmation_window_seconds`; it
+stays `0` unless `detection.min_detections` is raised above `1`.
 
 ### `GET /api/v1/detections`
 
@@ -282,7 +284,8 @@ birdsong_build_info{version="0.1.0",model="birdnet-v2.4",station="Backyard"} 1
 
 Also exported: `birdsong_uptime_seconds`, `birdsong_masked_chunks_total`,
 `birdsong_audio_gaps_total`, `birdsong_detections_total`, `birdsong_inference_errors_total`,
-`birdsong_store_errors_total`, `birdsong_clips_written_total`, `birdsong_clip_errors_total`.
+`birdsong_store_errors_total`, `birdsong_clips_written_total`, `birdsong_clip_errors_total`,
+`birdsong_unconfirmed_detections_total`.
 
 ### `GET /api/v1/config`
 

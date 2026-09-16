@@ -9,6 +9,7 @@
 
 mod bundle;
 mod classifier;
+mod confirm;
 mod error;
 mod labels;
 pub mod mel;
@@ -18,11 +19,12 @@ mod species_filter;
 
 pub use bundle::{ModelBundle, SpeciesFilterKind};
 pub use classifier::{Classifier, TractClassifier, BIRDNET_V24_MODEL_ID};
+pub use confirm::{Confirmer, DynamicThresholds};
 pub use error::ModelError;
 pub use labels::{Label, Labels};
 pub use meta::MetaModel;
 pub use postprocess::{
-    analyze_chunk, top_scores, ChunkAnalysis, ChunkContext, NeighbourMask, PostprocessConfig,
-    SigmoidSensitivity,
+    analyze_chunk, analyze_chunk_with, top_scores, ChunkAnalysis, ChunkContext, NeighbourMask,
+    PostprocessConfig, SigmoidSensitivity,
 };
 pub use species_filter::SpeciesFilter;

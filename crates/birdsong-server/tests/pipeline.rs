@@ -29,12 +29,18 @@ fn fixture() -> PathBuf {
 }
 
 fn config(data_dir: &Path) -> Config {
+    config_with(data_dir, "")
+}
+
+/// `extra` is spliced in before the audio sources, so it may open its own tables.
+fn config_with(data_dir: &Path, extra: &str) -> Config {
     Config::from_toml(&format!(
         r#"
 [station]
 latitude = 42.36
 longitude = -71.06
 timezone = "America/New_York"
+{extra}
 [[audio.sources]]
 id = "file0"
 kind = "file"
@@ -44,6 +50,7 @@ dir = {models:?}
 [storage]
 data_dir = {data:?}
 "#,
+        extra = extra,
         fixture = fixture().display().to_string(),
         models = repo_root().join("models").display().to_string(),
         data = data_dir.display().to_string(),
@@ -148,6 +155,85 @@ async fn fixture_detections_are_stored_and_broadcast() {
     ));
     let reader = decoder.read_info().unwrap();
     assert_eq!((reader.info().width, reader.info().height), (800, 300));
+}
+
+/// Run the fixture once and report `(stored, unconfirmed, chunks)`.
+async fn run_fixture(extra: &str) -> (u64, u64, u64) {
+    let dir = tempfile::tempdir().unwrap();
+    let cfg = config_with(dir.path(), extra);
+    let bundle = ModelBundle::load(&cfg).unwrap();
+    let store = SqliteStore::open(
+        &cfg.storage.database_path(),
+        StoreOptions::from_config(&cfg),
+    )
+    .await
+    .unwrap();
+    let start = Utc.with_ymd_and_hms(2026, 5, 15, 10, 0, 0).unwrap();
+    let source = WavFileSource::new("file0", fixture(), Pacing::Fast { start_at: start });
+    let pipeline = Pipeline::with_sources(
+        cfg,
+        bundle,
+        Arc::new(store),
+        vec![SourceSpec {
+            source: Box::new(source),
+            backpressure: Backpressure::Wait,
+        }],
+        PipelineOptions {
+            exit_on_eof: true,
+            fast_files: true,
+        },
+    );
+    let summary = tokio::time::timeout(
+        Duration::from_secs(60),
+        pipeline.run(CancellationToken::new()),
+    )
+    .await
+    .expect("pipeline finished")
+    .expect("pipeline ok");
+    (
+        summary.detections,
+        summary.unconfirmed_detections,
+        summary.chunks_processed,
+    )
+}
+
+/// `min_detections` holds a species back until it repeats. The same audio is analysed either way,
+/// so every detection the model made is either stored or counted as unconfirmed.
+#[tokio::test(flavor = "multi_thread")]
+async fn repeat_confirmation_drops_one_off_detections() {
+    if !models_present() {
+        eprintln!("skipping: models not present");
+        return;
+    }
+    let (base_stored, base_unconfirmed, base_chunks) = run_fixture("").await;
+    assert_eq!(base_unconfirmed, 0, "confirmation is off by default");
+
+    let (stored, unconfirmed, chunks) = run_fixture(
+        r#"
+[audio]
+ring_buffer_seconds = 60.0
+
+[detection]
+min_detections = 2
+confirmation_window_seconds = 15.0
+"#,
+    )
+    .await;
+
+    assert_eq!(chunks, base_chunks, "the same audio is analysed either way");
+    assert!(
+        stored <= base_stored,
+        "confirmation only removes detections: {stored} vs {base_stored}"
+    );
+    assert_eq!(
+        stored + unconfirmed,
+        base_stored,
+        "every detection is stored or counted unconfirmed"
+    );
+    assert!(
+        unconfirmed > 0,
+        "the fixture has at least one species heard only once"
+    );
 }
 
 #[tokio::test(flavor = "multi_thread")]

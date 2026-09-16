@@ -106,6 +106,19 @@ pub fn analyze_chunk(
     cfg: &PostprocessConfig,
     ctx: &ChunkContext,
 ) -> ChunkAnalysis {
+    analyze_chunk_with(logits, labels, filter, cfg, ctx, &|_| cfg.min_confidence)
+}
+
+/// As [`analyze_chunk`], but with a per-class confidence threshold, so
+/// [`crate::DynamicThresholds`] can lower the bar for species heard clearly a moment ago.
+pub fn analyze_chunk_with(
+    logits: &[f32],
+    labels: &Labels,
+    filter: &SpeciesFilter,
+    cfg: &PostprocessConfig,
+    ctx: &ChunkContext,
+    threshold_for: &dyn Fn(usize) -> f32,
+) -> ChunkAnalysis {
     debug_assert_eq!(logits.len(), labels.len());
     let ranked = ranking(logits);
 
@@ -123,8 +136,9 @@ pub fn analyze_chunk(
             .take(cfg.top_n_per_chunk)
         {
             let confidence = cfg.sensitivity.apply(logits[i]);
-            if confidence < cfg.min_confidence {
-                break; // ranked descending, nothing further can pass
+            if confidence < threshold_for(i) {
+                // Thresholds can differ per species, so a lower-ranked class may still pass.
+                continue;
             }
             let label = &labels.get(i).expect("index within labels");
             detections.push(Detection {

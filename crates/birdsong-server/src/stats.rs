@@ -17,6 +17,7 @@ pub struct PipelineStats {
     masked_chunks: AtomicU64,
     gaps: AtomicU64,
     detections: AtomicU64,
+    unconfirmed_detections: AtomicU64,
     inference_errors: AtomicU64,
     store_errors: AtomicU64,
     clips_written: AtomicU64,
@@ -41,6 +42,8 @@ pub struct StatsSnapshot {
     pub masked_chunks: u64,
     pub gaps: u64,
     pub detections: u64,
+    /// Detections dropped because their species was never confirmed (`min_detections`).
+    pub unconfirmed_detections: u64,
     pub inference_errors: u64,
     pub store_errors: u64,
     pub clips_written: u64,
@@ -95,6 +98,10 @@ impl PipelineStats {
         self.detections.fetch_add(n, Ordering::Relaxed);
     }
 
+    pub(crate) fn detections_unconfirmed(&self, n: u64) {
+        self.unconfirmed_detections.fetch_add(n, Ordering::Relaxed);
+    }
+
     pub(crate) fn inference_error(&self) {
         self.inference_errors.fetch_add(1, Ordering::Relaxed);
     }
@@ -135,6 +142,7 @@ impl PipelineStats {
             masked_chunks: self.masked_chunks.load(Ordering::Relaxed),
             gaps: self.gaps.load(Ordering::Relaxed),
             detections: self.detections.load(Ordering::Relaxed),
+            unconfirmed_detections: self.unconfirmed_detections.load(Ordering::Relaxed),
             inference_errors: self.inference_errors.load(Ordering::Relaxed),
             store_errors: self.store_errors.load(Ordering::Relaxed),
             clips_written: self.clips_written.load(Ordering::Relaxed),

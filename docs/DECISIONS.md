@@ -324,3 +324,35 @@ One entry per non-obvious decision. Newest at the bottom. Format: Decision / Why
 - **Rejected.** An async HTTP client (would cancel mid-request, but reqwest's rustls now pulls in
   the FFI crypto library the policy excludes); uploading from the clip writer itself (network
   trouble would delay clips).
+
+## 23. 2026-09-16 — Optional detection-quality filters
+
+- **Decision.** Two switches in `[detection]`, both off by default, so the stock pipeline keeps
+  BirdNET-Pi's behaviour exactly.
+  - **Repeat confirmation.** `min_detections` (default `1`) and `confirmation_window_seconds`
+    (default `15`): a species is stored only once it has been detected `min_detections` times
+    within the window. The earlier hits that led to the confirmation are stored too, so nothing is
+    lost, and once a species is confirmed further detections pass straight through while the window
+    keeps rolling. Each source keeps its own `Confirmer`; a held analysis delays the ones behind it
+    by at most one window, and everything still held is settled when the source ends and at
+    shutdown. Detections dropped unconfirmed are counted (`unconfirmed_detections` in
+    `/api/v1/stats`, `birdsong_unconfirmed_detections_total` in `/metrics`).
+  - **Dynamic thresholds.** `dynamic_threshold` (default `false`) with
+    `dynamic_threshold_trigger` (`0.9`), `dynamic_threshold_min` (`0.2`) and
+    `dynamic_threshold_hours` (`24`): after a detection above the trigger, that species' threshold
+    steps to 75 %, 50 % then 25 % of `min_confidence`, never below the floor, and expires. Only the
+    species heard clearly is affected; every other class keeps `min_confidence`.
+  - When `min_detections > 1`, `audio.ring_buffer_seconds` must cover the confirmation window plus
+    the clip length, validated when the config loads.
+  - `birdsong analyze` applies both, so the offline tool still reports what `run` would store.
+- **Why.** The two commonest complaints about a BirdNET-Pi station are one-off false positives and
+  missed quiet calls of a bird that is obviously present. Confirmation addresses the first, dynamic
+  thresholds the second, and they are the mechanisms BirdNET-Go uses, so the behaviour is familiar.
+  Both are off by default because they trade latency (confirmation delays storage by up to a
+  window) and precision (lowered thresholds admit more) for recall, which is a choice for the
+  station owner, not a default.
+- **Rejected.** Making either unconditional (changes stored results for existing stations);
+  confirming across sources (two microphones in different places are independent evidence, and
+  merging them would let one noisy source confirm another's false positive); dropping the hits that
+  preceded a confirmation (they are real detections, and losing them would leave gaps in the
+  history and in the clip record).
