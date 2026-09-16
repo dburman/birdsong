@@ -165,6 +165,7 @@ pub struct ScoreReport {
 pub struct DetectionReport {
     pub scientific_name: String,
     pub common_name: String,
+    pub kind: birdsong_core::DetectionKind,
     pub confidence: f32,
 }
 
@@ -172,6 +173,7 @@ pub struct DetectionReport {
 pub struct SpeciesCount {
     pub scientific_name: String,
     pub common_name: String,
+    pub kind: birdsong_core::DetectionKind,
     pub count: usize,
     pub max_confidence: f32,
 }
@@ -337,6 +339,7 @@ pub fn analyze_samples(
                 .or_insert_with(|| SpeciesCount {
                     scientific_name: d.scientific_name.clone(),
                     common_name: d.common_name.clone(),
+                    kind: d.kind,
                     count: 0,
                     max_confidence: 0.0,
                 });
@@ -349,6 +352,7 @@ pub fn analyze_samples(
             .map(|d| DetectionReport {
                 scientific_name: d.scientific_name,
                 common_name: d.common_name,
+                kind: d.kind,
                 confidence: d.confidence,
             })
             .collect();
@@ -476,8 +480,16 @@ pub fn render_text(r: &AnalysisReport) -> String {
     for s in &r.summary {
         let _ = writeln!(
             out,
-            "  {:>3} x {} ({})  max {:.3}",
-            s.count, s.common_name, s.scientific_name, s.max_confidence
+            "  {:>3} x {} ({})  max {:.3}{}",
+            s.count,
+            s.common_name,
+            s.scientific_name,
+            s.max_confidence,
+            if s.kind == birdsong_core::DetectionKind::SoundEvent {
+                "  [sound event]"
+            } else {
+                ""
+            }
         );
     }
     out

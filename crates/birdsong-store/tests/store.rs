@@ -5,7 +5,7 @@ use std::collections::HashSet;
 use std::sync::Arc;
 
 use birdsong_core::config::RetentionConfig;
-use birdsong_core::Detection;
+use birdsong_core::{Detection, DetectionKind};
 use birdsong_store::{
     AnalysisParams, ClipInfo, DetectionQuery, DetectionStore, Order, PurgeReason, SqliteStore,
     StoreOptions,
@@ -46,6 +46,7 @@ fn det(sci: &str, common: &str, conf: f32, at: DateTime<Utc>) -> Detection {
         confidence: conf,
         source_id: "mic0".into(),
         model_id: "birdnet-v2.4".into(),
+        kind: birdsong_core::DetectionKind::Animal,
         clip_path: None,
     }
 }
@@ -316,7 +317,7 @@ async fn daily_stats_across_dst_changes() {
         .unwrap(); // 01:30 EST
 
     let spring = store
-        .stats_daily(NaiveDate::from_ymd_opt(2026, 3, 8).unwrap())
+        .stats_daily(NaiveDate::from_ymd_opt(2026, 3, 8).unwrap(), None)
         .await
         .unwrap();
     assert_eq!(spring.species.len(), 2);
@@ -332,7 +333,7 @@ async fn daily_stats_across_dst_changes() {
     assert_eq!(spring.species[1].by_hour[3], 1);
 
     let eve = store
-        .stats_daily(NaiveDate::from_ymd_opt(2026, 3, 7).unwrap())
+        .stats_daily(NaiveDate::from_ymd_opt(2026, 3, 7).unwrap(), None)
         .await
         .unwrap();
     assert_eq!(eve.species.len(), 1);
@@ -342,14 +343,14 @@ async fn daily_stats_across_dst_changes() {
     );
 
     let fall = store
-        .stats_daily(NaiveDate::from_ymd_opt(2026, 11, 1).unwrap())
+        .stats_daily(NaiveDate::from_ymd_opt(2026, 11, 1).unwrap(), None)
         .await
         .unwrap();
     assert_eq!(fall.species[0].total, 2);
     assert_eq!(fall.species[0].by_hour[1], 2, "both 01:30s land in hour 1");
 
     let empty = store
-        .stats_daily(NaiveDate::from_ymd_opt(2026, 1, 1).unwrap())
+        .stats_daily(NaiveDate::from_ymd_opt(2026, 1, 1).unwrap(), None)
         .await
         .unwrap();
     assert!(empty.species.is_empty());
@@ -381,7 +382,7 @@ async fn species_summary_aggregates() {
         .await
         .unwrap();
 
-    let all = store.species_summary(None).await.unwrap();
+    let all = store.species_summary(None, None).await.unwrap();
     assert_eq!(all.len(), 2);
     let a = &all[0];
     assert_eq!(
@@ -401,7 +402,7 @@ async fn species_summary_aggregates() {
     assert_eq!(all[1].best_clip_detection_id, None);
 
     let recent = store
-        .species_summary(Some(t0 + TimeDelta::minutes(2)))
+        .species_summary(Some(t0 + TimeDelta::minutes(2)), None)
         .await
         .unwrap();
     assert_eq!(
@@ -411,6 +412,109 @@ async fn species_summary_aggregates() {
             .collect::<Vec<_>>(),
         [("Alpha", 1), ("Beta", 1)]
     );
+}
+
+#[tokio::test]
+async fn sound_events_are_stored_and_filtered_by_kind() {
+    let (_dir, store) = open().await;
+    let t0 = utc(2026, 6, 1, 12, 0);
+    store.insert(&det("A a", "Alpha", 0.8, t0)).await.unwrap();
+    let engine = store
+        .insert(&Detection {
+            kind: DetectionKind::SoundEvent,
+            ..det("Engine", "Engine", 0.99, t0 + TimeDelta::minutes(1))
+        })
+        .await
+        .unwrap();
+    assert_eq!(
+        store.get(engine).await.unwrap().unwrap().kind,
+        DetectionKind::SoundEvent
+    );
+
+    let summary = |kind| {
+        let store = store.clone();
+        async move { store.species_summary(None, kind).await.unwrap() }
+    };
+    let events = summary(Some(DetectionKind::SoundEvent)).await;
+    assert_eq!(events.len(), 1);
+    assert_eq!(
+        (events[0].best_detection_id, events[0].kind),
+        (engine, DetectionKind::SoundEvent)
+    );
+    let animals = summary(Some(DetectionKind::Animal)).await;
+    assert_eq!(animals.len(), 1);
+    assert_eq!(animals[0].kind, DetectionKind::Animal);
+    assert_eq!(summary(None).await.len(), 2, "no filter: both kinds");
+
+    let listed = store
+        .list(&DetectionQuery {
+            kind: Some(DetectionKind::SoundEvent),
+            ..Default::default()
+        })
+        .await
+        .unwrap();
+    assert_eq!(listed.iter().map(|r| r.id).collect::<Vec<_>>(), [engine]);
+
+    let day = t0.with_timezone(&chrono_tz::America::New_York).date_naive();
+    let daily = store
+        .stats_daily(day, Some(DetectionKind::Animal))
+        .await
+        .unwrap();
+    assert_eq!(daily.species.len(), 1);
+    assert_eq!(daily.species[0].scientific_name, "A a");
+    assert_eq!(store.stats_daily(day, None).await.unwrap().species.len(), 2);
+}
+
+/// Rows stored before the `kind` column existed get the right kind from the migration.
+#[tokio::test]
+async fn kind_migration_backfills_existing_rows() {
+    let pool = sqlx::sqlite::SqlitePoolOptions::new()
+        .max_connections(1)
+        .connect("sqlite::memory:")
+        .await
+        .unwrap();
+    sqlx::raw_sql(include_str!("../migrations/0001_init.sql"))
+        .execute(&pool)
+        .await
+        .unwrap();
+    for (name, model) in [
+        ("Poecile atricapillus", "birdnet-v2.4"),
+        ("Dog", "birdnet-v2.4"),
+        ("Siren", "birdnet-v2.4"),
+        ("Human vocal", "birdnet-v2.4"),
+        ("Alces alces", "perch-v2"),
+        ("Dog", "perch-v2"),
+        ("Frog", "perch-v2"),
+        ("Car_passing_by", "perch-v2"),
+        ("Rain", "perch-v2"),
+    ] {
+        sqlx::query(
+            "INSERT INTO detections (detected_at_utc, local_date, local_hour, scientific_name, \
+             common_name, confidence, source_id, model_id) \
+             VALUES ('2026-06-01T12:00:00.000000Z', '2026-06-01', 8, ?, ?, 0.9, 'mic0', ?)",
+        )
+        .bind(name)
+        .bind(name)
+        .bind(model)
+        .execute(&pool)
+        .await
+        .unwrap();
+    }
+    sqlx::raw_sql(include_str!("../migrations/0002_detection_kind.sql"))
+        .execute(&pool)
+        .await
+        .unwrap();
+    let kinds: Vec<(String, String)> =
+        sqlx::query_as("SELECT scientific_name, kind FROM detections ORDER BY id")
+            .fetch_all(&pool)
+            .await
+            .unwrap();
+    let events: Vec<&str> = kinds
+        .iter()
+        .filter(|(_, k)| k == "sound_event")
+        .map(|(n, _)| n.as_str())
+        .collect();
+    assert_eq!(events, ["Siren", "Human vocal", "Car_passing_by", "Rain"]);
 }
 
 #[tokio::test]

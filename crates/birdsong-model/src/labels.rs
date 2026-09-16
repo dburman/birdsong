@@ -1,7 +1,43 @@
 use std::collections::HashMap;
 use std::path::Path;
 
+use birdsong_core::DetectionKind;
+
 use crate::ModelError;
+
+/// BirdNET V2.4 classes that are not animals (`Dog` is). The `Human …` classes count too.
+pub const BIRDNET_SOUND_EVENTS: &[&str] = &[
+    "Engine",
+    "Environmental",
+    "Fireworks",
+    "Gun",
+    "Noise",
+    "Siren",
+];
+
+/// Perch v2 sound-event classes (FSD50K) that are animals; every other sound event is stored as
+/// [`DetectionKind::SoundEvent`]. Ambiguous classes (`Buzz`, `Hiss`, `Squeak`, `Screech`,
+/// `Rattle`) are sound events.
+pub const PERCH_ANIMAL_EVENTS: &[&str] = &[
+    "Animal",
+    "Bark",
+    "Cat",
+    "Chicken_and_rooster",
+    "Chirp_and_tweet",
+    "Cricket",
+    "Crow",
+    "Dog",
+    "Domestic_animals_and_pets",
+    "Fowl",
+    "Frog",
+    "Growling",
+    "Gull_and_seagull",
+    "Insect",
+    "Livestock_and_farm_animals_and_working_animals",
+    "Meow",
+    "Purr",
+    "Wild_animals",
+];
 
 /// First line of Perch v2's full label file; not a class.
 pub const PERCH_LABELS_HEADER: &str = "inat2024_fsd50k";
@@ -56,6 +92,8 @@ pub struct Label {
     pub common: String,
     /// Counts as a person for the privacy filter.
     pub human: bool,
+    /// Not an animal: stored as a sound event.
+    pub sound_event: bool,
 }
 
 impl Label {
@@ -63,6 +101,14 @@ impl Label {
     /// `Human vocal_Human vocal`); for Perch, one of [`PERCH_HUMAN_CLASSES`].
     pub fn is_human(&self) -> bool {
         self.human
+    }
+
+    pub fn kind(&self) -> DetectionKind {
+        if self.sound_event {
+            DetectionKind::SoundEvent
+        } else {
+            DetectionKind::Animal
+        }
     }
 }
 
@@ -95,11 +141,14 @@ impl Labels {
                 Some((s, c)) => (s.to_string(), c.to_string()),
                 None => (raw.to_string(), raw.to_string()),
             };
+            let human = raw.contains("Human");
+            let sound_event = human || BIRDNET_SOUND_EVENTS.contains(&scientific.as_str());
             entries.push(Label {
                 raw: raw.to_string(),
                 scientific,
                 common,
-                human: raw.contains("Human"),
+                human,
+                sound_event,
             });
         }
         Self::from_entries(entries)
@@ -138,11 +187,13 @@ impl Labels {
             } else {
                 raw.replace('_', " ")
             };
+            let event = !raw.contains(' ');
             entries.push(Label {
                 raw: raw.to_string(),
                 scientific: raw.to_string(),
                 common,
                 human: PERCH_HUMAN_CLASSES.contains(&raw),
+                sound_event: event && !PERCH_ANIMAL_EVENTS.contains(&raw),
             });
         }
         Self::from_entries(entries)
@@ -213,6 +264,22 @@ mod tests {
         assert_eq!(l.get(0).unwrap().common, "Black-capped Chickadee");
         assert!(!l.get(0).unwrap().is_human());
         assert!(l.get(1).unwrap().is_human());
+        let kinds: Vec<_> = l.iter().map(Label::kind).collect();
+        assert_eq!(
+            kinds,
+            [
+                DetectionKind::Animal,
+                DetectionKind::SoundEvent,
+                DetectionKind::SoundEvent
+            ]
+        );
+        let dog = Labels::parse("Dog_Dog\nSiren_Siren\n").unwrap();
+        assert_eq!(
+            dog.get(0).unwrap().kind(),
+            DetectionKind::Animal,
+            "a dog is an animal"
+        );
+        assert_eq!(dog.get(1).unwrap().kind(), DetectionKind::SoundEvent);
         assert_eq!(l.index_of_scientific("Noise"), Some(2));
         assert_eq!(l.index_of_scientific("Nope"), None);
         assert!(l.indices_for(&["Nope".into()], "test").is_err());
@@ -234,6 +301,22 @@ mod tests {
         assert_eq!(l.get(2).unwrap().common, "Male speech and man speaking");
         let human: Vec<_> = l.iter().map(Label::is_human).collect();
         assert_eq!(human, [false, false, true, false, false]);
+        let events: Vec<_> = l.iter().map(|x| x.sound_event).collect();
+        assert_eq!(
+            events,
+            [false, false, true, true, true],
+            "species are animals; people, synthesizers and cars are sound events"
+        );
+        let animals = Labels::parse_perch("Dog\nFrog\nBuzz\n", None).unwrap();
+        let kinds: Vec<_> = animals.iter().map(Label::kind).collect();
+        assert_eq!(
+            kinds,
+            [
+                DetectionKind::Animal,
+                DetectionKind::Animal,
+                DetectionKind::SoundEvent
+            ]
+        );
         assert_eq!(l.index_of_scientific("Car_passing_by"), Some(4));
         assert_eq!(
             Labels::parse_perch("Alces alces\n", None).unwrap().len(),
@@ -252,9 +335,13 @@ mod tests {
             return;
         };
         assert_eq!(l.len(), 14_795);
-        for name in PERCH_HUMAN_CLASSES {
+        for name in PERCH_HUMAN_CLASSES.iter().chain(PERCH_ANIMAL_EVENTS) {
             assert!(l.index_of_scientific(name).is_some(), "{name}");
         }
+        assert_eq!(
+            l.iter().filter(|x| x.sound_event).count(),
+            198 - PERCH_ANIMAL_EVENTS.len()
+        );
     }
 
     #[test]
@@ -276,5 +363,11 @@ mod tests {
         assert_eq!(l.get(4771).unwrap().common, "Black-capped Chickadee");
         assert_eq!(l.index_of_scientific("Human vocal"), Some(2819)); // 0-based (line 2820)
         assert_eq!(l.iter().filter(|x| x.is_human()).count(), 3);
+        for name in BIRDNET_SOUND_EVENTS {
+            let i = l.index_of_scientific(name).expect(name);
+            assert_eq!(l.get(i).unwrap().kind(), DetectionKind::SoundEvent);
+        }
+        let dog = l.index_of_scientific("Dog").unwrap();
+        assert_eq!(l.get(dog).unwrap().kind(), DetectionKind::Animal);
     }
 }

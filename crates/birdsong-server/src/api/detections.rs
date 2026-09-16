@@ -46,6 +46,7 @@ fn query_from(q: &Params) -> ApiResult<DetectionQuery> {
         until: params::opt_timestamp(q, "until")?,
         species: params::text(q, "species"),
         min_confidence: params::opt_confidence(q, "min_confidence")?,
+        kind: params::kind(q, None)?,
         limit: params::opt_limit(q)?,
         order: params::order(q)?,
     })
@@ -68,6 +69,7 @@ pub async fn latest(
 ) -> ApiResult<Json<Page<DetectionRecord>>> {
     let query = DetectionQuery {
         limit: Some(params::opt_limit(&q)?.unwrap_or(20)),
+        kind: params::kind(&q, None)?,
         order: Order::Desc,
         ..Default::default()
     };

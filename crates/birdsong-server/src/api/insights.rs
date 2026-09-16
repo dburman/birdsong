@@ -1,6 +1,7 @@
 use axum::extract::{Query, State};
 use axum::Json;
 use birdsong_audio::redact_url;
+use birdsong_core::DetectionKind;
 use chrono::{TimeDelta, Utc};
 use serde_json::{json, Value};
 
@@ -36,17 +37,21 @@ pub async fn health(State(state): State<AppState>) -> Json<Value> {
     }))
 }
 
-/// `GET /species?since=`
+/// Charts and species lists show animals unless `kind` says otherwise.
+const CHART_KIND: Option<DetectionKind> = Some(DetectionKind::Animal);
+
+/// `GET /species?since=&kind=`
 pub async fn species(
     State(state): State<AppState>,
     Query(q): Query<Params>,
 ) -> ApiResult<Json<Value>> {
     let since = params::opt_timestamp(&q, "since")?;
-    let items = state.store.species_summary(since).await?;
+    let kind = params::kind(&q, CHART_KIND)?;
+    let items = state.store.species_summary(since, kind).await?;
     Ok(Json(json!({ "since": since, "items": items })))
 }
 
-/// `GET /stats/daily?date=YYYY-MM-DD` (default: today in the station time zone)
+/// `GET /stats/daily?date=YYYY-MM-DD&kind=` (default: today in the station time zone)
 pub async fn stats_daily(
     State(state): State<AppState>,
     Query(q): Query<Params>,
@@ -57,13 +62,14 @@ pub async fn stats_daily(
             .with_timezone(&state.config.station.timezone)
             .date_naive(),
     };
-    let stats = state.store.stats_daily(date).await?;
+    let kind = params::kind(&q, CHART_KIND)?;
+    let stats = state.store.stats_daily(date, kind).await?;
     serde_json::to_value(stats)
         .map(Json)
         .map_err(|e| ApiError::internal(e.to_string()))
 }
 
-/// `GET /stats/recent?window=24h`
+/// `GET /stats/recent?window=24h&kind=`
 pub async fn stats_recent(
     State(state): State<AppState>,
     Query(q): Query<Params>,
@@ -78,7 +84,8 @@ pub async fn stats_recent(
     };
     let until = Utc::now();
     let since = until - TimeDelta::seconds(seconds);
-    let species = state.store.species_summary(Some(since)).await?;
+    let kind = params::kind(&q, CHART_KIND)?;
+    let species = state.store.species_summary(Some(since), kind).await?;
     Ok(Json(
         json!({ "window": name, "since": since, "until": until, "species": species }),
     ))

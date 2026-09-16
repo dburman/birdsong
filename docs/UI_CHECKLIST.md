@@ -41,6 +41,15 @@ several species, then open `http://127.0.0.1:8080/`.
 - [ ] Sorted by detection count; "Best" is the highest confidence.
 - [ ] The best-recording button plays that species' best remaining clip.
 
+## Sound events
+
+- [ ] Non-animal sounds (engine, siren, rain, music) appear only in the "Sound events" card, never in
+      the bar chart, the hourly chart, recent detections or the species table.
+- [ ] A dog, cat or frog is listed with the animals, not as a sound event.
+- [ ] A new sound event updates the card within a few seconds without adding a row to recent
+      detections; its best-recording button plays the clip.
+- [ ] Sound-event names show once ("Car passing by"), with no duplicate scientific name below.
+
 ## Layout and accessibility
 
 - [ ] At about 400 px wide there is no horizontal page scrolling; tables scroll inside their card.

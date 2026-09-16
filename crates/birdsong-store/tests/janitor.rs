@@ -65,6 +65,7 @@ async fn add(env: &Env, sci: &str, conf: f32, at: DateTime<Utc>, rel: &str, byte
             confidence: conf,
             source_id: "mic0".into(),
             model_id: "test".into(),
+            kind: birdsong_core::DetectionKind::Animal,
             clip_path: None,
         })
         .await
@@ -258,6 +259,7 @@ async fn reconcile_fixes_both_directions_and_stays_inside_clips_dir() {
             confidence: 0.9,
             source_id: "mic0".into(),
             model_id: "test".into(),
+            kind: birdsong_core::DetectionKind::Animal,
             clip_path: None,
         })
         .await

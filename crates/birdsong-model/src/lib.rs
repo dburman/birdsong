@@ -24,7 +24,10 @@ pub use bundle::{ModelBundle, SpeciesFilterKind};
 pub use classifier::{Classifier, TractClassifier, BIRDNET_V24_MODEL_ID};
 pub use confirm::{Confirmer, DynamicThresholds};
 pub use error::ModelError;
-pub use labels::{Label, Labels, PERCH_HUMAN_CLASSES, PERCH_LABELS_HEADER};
+pub use labels::{
+    Label, Labels, BIRDNET_SOUND_EVENTS, PERCH_ANIMAL_EVENTS, PERCH_HUMAN_CLASSES,
+    PERCH_LABELS_HEADER,
+};
 pub use meta::MetaModel;
 pub use perch::{PerchClassifier, PERCH_V2_MODEL_ID, PERCH_WINDOW_SECONDS};
 pub use postprocess::{

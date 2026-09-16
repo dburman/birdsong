@@ -13,4 +13,4 @@ pub use config::Config;
 pub use error::ConfigError;
 pub use names::sanitize_name;
 pub use time::{local_date_and_hour, week_of_year, YEAR_ROUND_WEEK};
-pub use types::{Detection, CHUNK_SAMPLES, CHUNK_SECONDS, SAMPLE_RATE_HZ};
+pub use types::{Detection, DetectionKind, CHUNK_SAMPLES, CHUNK_SECONDS, SAMPLE_RATE_HZ};

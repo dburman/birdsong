@@ -1,4 +1,4 @@
-use birdsong_core::{Config, Detection};
+use birdsong_core::{Config, Detection, DetectionKind};
 use chrono::{DateTime, NaiveDate, Utc};
 use chrono_tz::Tz;
 use serde::{Deserialize, Serialize};
@@ -59,6 +59,7 @@ pub struct DetectionRecord {
     pub confidence: f32,
     pub source_id: String,
     pub model_id: String,
+    pub kind: DetectionKind,
     /// Relative to the clips directory; `None` when never saved or purged.
     pub clip_path: Option<String>,
     pub clip_bytes: Option<u64>,
@@ -75,6 +76,7 @@ impl DetectionRecord {
             confidence: self.confidence,
             source_id: self.source_id.clone(),
             model_id: self.model_id.clone(),
+            kind: self.kind,
             clip_path: self.clip_path.clone(),
         }
     }
@@ -106,6 +108,8 @@ pub struct DetectionQuery {
     /// Exact scientific name.
     pub species: Option<String>,
     pub min_confidence: Option<f32>,
+    /// Only animals or only sound events; both when `None`.
+    pub kind: Option<DetectionKind>,
     /// Defaults to [`DEFAULT_LIMIT`]; clamped to `1..=MAX_LIMIT`.
     pub limit: Option<u32>,
     pub order: Order,
@@ -130,6 +134,7 @@ pub struct ClipInfo {
 pub struct DailySpecies {
     pub scientific_name: String,
     pub common_name: String,
+    pub kind: DetectionKind,
     pub total: u32,
     pub by_hour: [u32; 24],
 }
@@ -147,6 +152,7 @@ pub struct SpeciesSummary {
     pub scientific_name: String,
     /// Common name of the best detection.
     pub common_name: String,
+    pub kind: DetectionKind,
     pub count: u64,
     pub first_seen: DateTime<Utc>,
     pub last_seen: DateTime<Utc>,

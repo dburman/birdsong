@@ -1,4 +1,4 @@
-use birdsong_core::Detection;
+use birdsong_core::{Detection, DetectionKind};
 use chrono::{DateTime, NaiveDate, Utc};
 
 use crate::{ClipInfo, DailyStats, DetectionQuery, DetectionRecord, SpeciesSummary, StoreError};
@@ -26,13 +26,20 @@ pub trait DetectionStore: Send + Sync {
 
     async fn list(&self, query: &DetectionQuery) -> Result<Vec<DetectionRecord>, StoreError>;
 
-    /// Detections on a station-local calendar date, per species per local hour.
-    async fn stats_daily(&self, date: NaiveDate) -> Result<DailyStats, StoreError>;
+    /// Detections on a station-local calendar date, per species per local hour; only `kind` when
+    /// given.
+    async fn stats_daily(
+        &self,
+        date: NaiveDate,
+        kind: Option<DetectionKind>,
+    ) -> Result<DailyStats, StoreError>;
 
-    /// Per-species aggregates for detections at or after `since` (all time when `None`).
+    /// Per-species aggregates for detections at or after `since` (all time when `None`); only
+    /// `kind` when given.
     async fn species_summary(
         &self,
         since: Option<DateTime<Utc>>,
+        kind: Option<DetectionKind>,
     ) -> Result<Vec<SpeciesSummary>, StoreError>;
 
     /// Disk used by all distinct clip files (audio plus spectrogram).

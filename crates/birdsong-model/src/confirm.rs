@@ -234,6 +234,7 @@ mod tests {
                     confidence: *confidence,
                     source_id: "mic0".into(),
                     model_id: "test".into(),
+                    kind: birdsong_core::DetectionKind::Animal,
                     clip_path: None,
                 })
                 .collect(),

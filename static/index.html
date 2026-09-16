@@ -72,6 +72,23 @@
       </div>
       <p id="species-empty" class="empty" hidden>No species recorded yet.</p>
     </section>
+
+    <section class="card wide" aria-labelledby="sound-events-title">
+      <div class="card-head">
+        <h2 id="sound-events-title">Sound events</h2>
+        <span id="sound-events-count" class="muted"></span>
+      </div>
+      <p class="muted">Other sounds the model recognised, such as engines, sirens or rain. They are not counted with the animals above.</p>
+      <div class="table-wrap">
+        <table id="sound-events">
+          <thead>
+            <tr><th scope="col">Sound</th><th scope="col" class="num">Detections</th><th scope="col">Last heard</th><th scope="col" class="num">Best</th><th scope="col">Best recording</th></tr>
+          </thead>
+          <tbody></tbody>
+        </table>
+      </div>
+      <p id="sound-events-empty" class="empty" hidden>No sound events recorded.</p>
+    </section>
   </main>
 
   <dialog id="viewer" aria-labelledby="viewer-title">

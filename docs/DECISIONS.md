@@ -391,3 +391,26 @@ One entry per non-obvious decision. Newest at the bottom. Format: Decision / Why
   kernels, about 100 lines with tests, and no new dependency); matching the privacy classes by
   keyword (`Car_passing_by` contains "sing"); failing config validation when BirdWeather and Perch
   are both configured (switching models would then require editing the BirdWeather section too).
+
+## 25. 2026-09-16 — Sound events are stored separately from animals
+
+- **Decision.** Every detection has a `kind`: `animal` or `sound_event`, set from the label. For
+  BirdNET V2.4 the sound events are `Engine`, `Environmental`, `Fireworks`, `Gun`, `Noise`,
+  `Siren` and the three `Human` classes; `Dog` is an animal. For Perch v2 every FSD50K sound-event
+  class is a sound event except those that are animals (`PERCH_ANIMAL_EVENTS`: dog, cat, bark,
+  meow, purr, growling, frog, cricket, insect, fowl, chicken, crow, gull, chirp, and the generic
+  animal groups); species are always animals. Ambiguous classes (`Buzz`, `Hiss`, `Squeak`,
+  `Screech`, `Rattle`) are sound events. Human classes are sound events when the privacy filter
+  lets them through. Sound events are still stored, clipped and streamed. `/species` and the two
+  `/stats` endpoints return animals unless `kind` asks for more; `/detections` and the stream
+  return both, each record carrying its `kind`. The dashboard shows sound events in their own card.
+  Migration 0002 adds the column and classifies rows stored before it.
+- **Why.** Perch recognises about 200 non-animal sounds, and without this rain, traffic or music
+  would fill the "latest birds" chart. Keeping them (rather than dropping them) is useful for
+  explaining missed birds and for noise monitoring. A dog, cat or frog is an animal and belongs
+  with the other animals. Ingestion through `/detections` keeps seeing every row, so no consumer
+  loses data.
+- **Rejected.** Dropping sound events before storage (loses information and their clips);
+  a third `human` kind (people are masked by the privacy filter in the default configuration);
+  treating the ambiguous classes as animals (they are usually mechanical); defaulting
+  `/detections` to animals (would silently change what existing ingestion receives).

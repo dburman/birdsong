@@ -43,6 +43,7 @@ fn detection(i: usize, at: DateTime<Utc>) -> Detection {
         confidence: 0.70 + (i % 30) as f32 * 0.01,
         source_id: "mic0".into(),
         model_id: "birdnet-v2.4".into(),
+        kind: birdsong_core::DetectionKind::Animal,
         clip_path: None,
     }
 }
@@ -452,6 +453,76 @@ async fn audio_supports_ranges_and_spectrogram_is_served() {
 }
 
 #[tokio::test]
+async fn sound_events_are_kept_out_of_charts_unless_asked_for() {
+    let env = env().await;
+    let siren = env
+        .state
+        .store
+        .insert(&Detection {
+            kind: birdsong_core::DetectionKind::SoundEvent,
+            ..detection(0, env.seeded_at)
+        })
+        .await
+        .unwrap();
+    let names = |body: &Value, key: &str| -> Vec<String> {
+        body[key]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|s| {
+                format!(
+                    "{}:{}",
+                    s["scientific_name"].as_str().unwrap(),
+                    s["kind"].as_str().unwrap()
+                )
+            })
+            .collect()
+    };
+
+    let (_, animals) = json(&env.router, "/api/v1/species").await;
+    let (_, events) = json(&env.router, "/api/v1/species?kind=sound_event").await;
+    let (_, all) = json(&env.router, "/api/v1/species?kind=all").await;
+    assert_eq!(names(&animals, "items").len(), 3);
+    assert!(names(&animals, "items")
+        .iter()
+        .all(|n| n.ends_with(":animal")));
+    assert_eq!(
+        names(&events, "items"),
+        ["Cardinalis cardinalis:sound_event"]
+    );
+    assert_eq!(
+        names(&all, "items").len(),
+        3,
+        "grouped by name; kind comes from the rows"
+    );
+
+    let (_, recent) = json(
+        &env.router,
+        "/api/v1/stats/recent?window=1h&kind=sound_event",
+    )
+    .await;
+    assert_eq!(names(&recent, "species").len(), 1);
+    let (_, daily) = json(&env.router, "/api/v1/stats/daily?kind=sound_event").await;
+    assert!(names(&daily, "species").len() <= 1);
+
+    let (_, page) = json(&env.router, "/api/v1/detections?kind=sound_event").await;
+    let items = page["items"].as_array().unwrap();
+    assert_eq!(items.len(), 1);
+    assert_eq!(items[0]["id"].as_i64(), Some(siren));
+    assert_eq!(items[0]["kind"], "sound_event");
+    let (_, latest) = json(&env.router, "/api/v1/detections/latest?limit=5").await;
+    assert_eq!(
+        latest["items"][0]["id"].as_i64(),
+        Some(siren),
+        "unfiltered by default"
+    );
+
+    let (status, body) = json(&env.router, "/api/v1/species?kind=plant").await;
+    assert_eq!(status, StatusCode::BAD_REQUEST);
+    assert!(body["error"].as_str().unwrap().contains("kind"), "{body}");
+}
+
+#[tokio::test]
 async fn species_and_stats() {
     let env = env().await;
     let (status, body) = json(&env.router, "/api/v1/species").await;
@@ -744,7 +815,7 @@ async fn prometheus_metrics() {
         ),
         "{text}"
     );
-    assert!(text.contains(r#"birdsong_species_detections{scientific_name="Cardinalis cardinalis",common_name="Northern Cardinal"} 17"#), "{text}");
+    assert!(text.contains(r#"birdsong_species_detections{scientific_name="Cardinalis cardinalis",common_name="Northern Cardinal",kind="animal"} 17"#), "{text}");
     let clip_bytes: u64 = text
         .lines()
         .find_map(|l| l.strip_prefix("birdsong_clip_bytes "))

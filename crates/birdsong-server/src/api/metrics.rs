@@ -28,7 +28,7 @@ fn metric(out: &mut String, name: &str, kind: &str, help: &str, value: impl std:
 pub async fn metrics(State(state): State<AppState>) -> ApiResult<Response> {
     let s = state.stats.snapshot();
     let clip_bytes = state.store.total_clip_bytes().await?;
-    let species = state.store.species_summary(None).await?;
+    let species = state.store.species_summary(None, None).await?;
     let now = Utc::now();
 
     let mut out = String::with_capacity(4096);
@@ -172,14 +172,15 @@ pub async fn metrics(State(state): State<AppState>) -> ApiResult<Response> {
     );
     let _ = writeln!(
         out,
-        "# HELP birdsong_species_detections Stored detections per species (all time).\n# TYPE birdsong_species_detections gauge"
+        "# HELP birdsong_species_detections Stored detections per species or sound event (all time).\n# TYPE birdsong_species_detections gauge"
     );
     for sp in &species {
         let _ = writeln!(
             out,
-            "birdsong_species_detections{{scientific_name=\"{}\",common_name=\"{}\"}} {}",
+            "birdsong_species_detections{{scientific_name=\"{}\",common_name=\"{}\",kind=\"{}\"}} {}",
             label(&sp.scientific_name),
             label(&sp.common_name),
+            sp.kind.as_str(),
             sp.count
         );
     }

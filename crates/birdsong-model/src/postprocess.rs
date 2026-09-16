@@ -169,6 +169,7 @@ pub fn analyze_chunk_with(
                 confidence,
                 source_id: ctx.source_id.clone(),
                 model_id: ctx.model_id.clone(),
+                kind: label.kind(),
                 clip_path: None,
             });
         }
@@ -398,6 +399,7 @@ mod tests {
             confidence: 0.9,
             source_id: "mic0".into(),
             model_id: "test".into(),
+            kind: birdsong_core::DetectionKind::Animal,
             clip_path: None,
         };
         ChunkAnalysis {

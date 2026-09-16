@@ -700,7 +700,11 @@ mod tests {
         async fn list(&self, _: &DetectionQuery) -> Result<Vec<DetectionRecord>, StoreError> {
             Ok(Vec::new())
         }
-        async fn stats_daily(&self, date: NaiveDate) -> Result<DailyStats, StoreError> {
+        async fn stats_daily(
+            &self,
+            date: NaiveDate,
+            _: Option<birdsong_core::DetectionKind>,
+        ) -> Result<DailyStats, StoreError> {
             Ok(DailyStats {
                 date,
                 species: Vec::new(),
@@ -709,6 +713,7 @@ mod tests {
         async fn species_summary(
             &self,
             _: Option<DateTime<Utc>>,
+            _: Option<birdsong_core::DetectionKind>,
         ) -> Result<Vec<SpeciesSummary>, StoreError> {
             Ok(Vec::new())
         }
@@ -726,6 +731,7 @@ mod tests {
             confidence: 0.9,
             source_id: "mic0".into(),
             model_id: "test".into(),
+            kind: birdsong_core::DetectionKind::Animal,
             clip_path: None,
         }
     }

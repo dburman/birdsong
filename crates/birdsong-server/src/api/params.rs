@@ -2,6 +2,7 @@
 
 use std::collections::HashMap;
 
+use birdsong_core::DetectionKind;
 use birdsong_store::Order;
 use chrono::{DateTime, NaiveDate, Utc};
 
@@ -69,6 +70,19 @@ pub fn opt_limit(q: &Params) -> ApiResult<Option<u32>> {
             })
         })
         .transpose()
+}
+
+/// `kind=animal|sound_event|all`; `default` when absent. `all` means no filter.
+pub fn kind(q: &Params, default: Option<DetectionKind>) -> ApiResult<Option<DetectionKind>> {
+    match value(q, "kind") {
+        None => Ok(default),
+        Some("all") => Ok(None),
+        Some(v) => DetectionKind::parse(v).map(Some).ok_or_else(|| {
+            ApiError::bad_request(format!(
+                "kind must be animal, sound_event or all, got {v:?}"
+            ))
+        }),
+    }
 }
 
 pub fn order(q: &Params) -> ApiResult<Order> {

@@ -10,7 +10,35 @@ pub const CHUNK_SECONDS: f32 = 3.0;
 /// Samples in BirdNET V2.4's window (`3 s × 48 kHz`).
 pub const CHUNK_SAMPLES: usize = 144_000;
 
-/// One species detected in one analysis window.
+/// What a detection is. Charts and species lists show animals; sound events are listed separately.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum DetectionKind {
+    /// A species, or an animal sound such as a dog's bark or a frog.
+    #[default]
+    Animal,
+    /// Anything else the model recognises: engines, rain, music, sirens, people.
+    SoundEvent,
+}
+
+impl DetectionKind {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Animal => "animal",
+            Self::SoundEvent => "sound_event",
+        }
+    }
+
+    pub fn parse(value: &str) -> Option<Self> {
+        match value {
+            "animal" => Some(Self::Animal),
+            "sound_event" => Some(Self::SoundEvent),
+            _ => None,
+        }
+    }
+}
+
+/// One species or sound detected in one analysis window.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct Detection {
     /// Database id; `None` until stored.
@@ -25,6 +53,8 @@ pub struct Detection {
     pub source_id: String,
     /// Identifier of the classifier that produced it (`"birdnet-v2.4"`).
     pub model_id: String,
+    #[serde(default)]
+    pub kind: DetectionKind,
     /// Saved clip, relative to the clips directory; `None` if never saved or purged.
     pub clip_path: Option<String>,
 }

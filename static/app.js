@@ -321,7 +321,7 @@ function detectionRow(d) {
     "tr",
     { "data-id": d.id },
     el("td", {}, fmt.time(d.detected_at), el("span", { class: "when", "data-iso": d.detected_at }, fmt.relative(d.detected_at))),
-    el("td", {}, d.common_name, el("span", { class: "sci" }, d.scientific_name)),
+    nameCell(d.common_name, d.scientific_name),
     el(
       "td",
       {},
@@ -373,7 +373,7 @@ async function refreshDetection(id) {
 
 async function loadDetections() {
   try {
-    const page = await api("detections/latest?limit=50");
+    const page = await api("detections/latest?limit=50&kind=animal");
     for (const d of page.items) addDetection(d, false);
     $("#detections-empty").hidden = page.items.length > 0;
   } catch (e) {
@@ -401,7 +401,9 @@ function connectStream() {
   stream.addEventListener("error", () => setLive("offline"));
   stream.addEventListener("detection", (event) => {
     try {
-      addDetection(JSON.parse(event.data), true);
+      const d = JSON.parse(event.data);
+      // Sound events are listed in their own card, refreshed below.
+      if (d.kind !== "sound_event") addDetection(d, true);
       scheduleRefresh();
     } catch (e) {
       console.warn("bad event", e);
@@ -415,38 +417,55 @@ function scheduleRefresh() {
     loadLatest();
     if (state.date === todayInStation()) loadDaily();
     loadSpecies();
+    loadSoundEvents();
   }, 3000);
 }
 
-// ---------- species ----------
+// ---------- species and sound events ----------
 
-async function loadSpecies() {
-  const tbody = $("#species tbody");
+function nameCell(common, scientific) {
+  const cell = el("td", {}, common);
+  // Sound events have no separate scientific name ("Car_passing_by" is shown as "Car passing by").
+  if (scientific.replaceAll("_", " ") !== common) cell.append(el("span", { class: "sci" }, scientific));
+  return cell;
+}
+
+function summaryRow(s) {
+  return el(
+    "tr",
+    {},
+    nameCell(s.common_name, s.scientific_name),
+    el("td", { class: "num" }, fmt.number(s.count)),
+    el("td", {}, fmt.dateTime(s.last_seen), el("span", { class: "when", "data-iso": s.last_seen }, fmt.relative(s.last_seen))),
+    el("td", { class: "num" }, fmt.percent(s.max_confidence)),
+    el("td", {}, s.best_clip_detection_id
+      ? el("div", { class: "rec" }, playButton(s.best_clip_detection_id, true, `best ${s.common_name} recording`))
+      : el("span", { class: "pending" }, "none kept")),
+  );
+}
+
+// `kind` is animal or sound_event; `id` names the table, its count and its empty message.
+async function loadSummary(kind, id, noun) {
+  const tbody = $(`#${id} tbody`);
   try {
-    const data = await api("species");
-    tbody.replaceChildren(
-      ...data.items.map((s) =>
-        el(
-          "tr",
-          {},
-          el("td", {}, s.common_name, el("span", { class: "sci" }, s.scientific_name)),
-          el("td", { class: "num" }, fmt.number(s.count)),
-          el("td", {}, fmt.dateTime(s.last_seen), el("span", { class: "when", "data-iso": s.last_seen }, fmt.relative(s.last_seen))),
-          el("td", { class: "num" }, fmt.percent(s.max_confidence)),
-          el("td", {}, s.best_clip_detection_id
-            ? el("div", { class: "rec" }, playButton(s.best_clip_detection_id, true, `best ${s.common_name} recording`))
-            : el("span", { class: "pending" }, "none kept")),
-        ),
-      ),
-    );
-    $("#species-empty").hidden = data.items.length > 0;
-    $("#species-count").textContent = data.items.length ? `${data.items.length} total` : "";
+    const data = await api(`species?kind=${kind}`);
+    tbody.replaceChildren(...data.items.map(summaryRow));
+    $(`#${id}-empty`).hidden = data.items.length > 0;
+    $(`#${id}-count`).textContent = data.items.length ? `${data.items.length} total` : "";
     syncPlayButtons();
   } catch (e) {
-    const empty = $("#species-empty");
+    const empty = $(`#${id}-empty`);
     empty.hidden = false;
-    empty.textContent = `Could not load species: ${e.message}`;
+    empty.textContent = `Could not load ${noun}: ${e.message}`;
   }
+}
+
+function loadSpecies() {
+  return loadSummary("animal", "species", "species");
+}
+
+function loadSoundEvents() {
+  return loadSummary("sound_event", "sound-events", "sound events");
 }
 
 function updateRelativeTimes() {
@@ -490,7 +509,7 @@ async function init() {
   });
   $("#viewer").addEventListener("close", () => $("#viewer-audio").pause());
 
-  await Promise.all([loadHealth(), loadLatest(), loadDaily(), loadDetections(), loadSpecies()]);
+  await Promise.all([loadHealth(), loadLatest(), loadDaily(), loadDetections(), loadSpecies(), loadSoundEvents()]);
   connectStream();
 
   setInterval(loadHealth, 15000);

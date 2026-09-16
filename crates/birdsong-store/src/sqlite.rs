@@ -3,7 +3,7 @@ use std::path::{Path, PathBuf};
 use std::time::Duration;
 
 use birdsong_core::config::RetentionConfig;
-use birdsong_core::{local_date_and_hour, week_of_year, Detection};
+use birdsong_core::{local_date_and_hour, week_of_year, Detection, DetectionKind};
 use chrono::{DateTime, NaiveDate, Utc};
 use sqlx::sqlite::{
     SqliteConnectOptions, SqliteJournalMode, SqlitePoolOptions, SqliteRow, SqliteSynchronous,
@@ -19,25 +19,27 @@ use crate::{
 
 const SELECT_DETECTIONS: &str =
     "SELECT id, detected_at_utc, local_date, local_hour, week, scientific_name, \
-     common_name, confidence, source_id, model_id, clip_path, clip_bytes, spectrogram_path \
+     common_name, confidence, source_id, model_id, kind, clip_path, clip_bytes, spectrogram_path \
      FROM detections WHERE 1 = 1";
 
 const INSERT_DETECTION: &str = "INSERT INTO detections (detected_at_utc, local_date, local_hour, \
      scientific_name, common_name, confidence, source_id, model_id, latitude, longitude, week, \
-     sensitivity, overlap_seconds, min_confidence, clip_path) \
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)";
+     sensitivity, overlap_seconds, min_confidence, clip_path, kind) \
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)";
 
 const DAILY_STATS: &str =
-    "SELECT scientific_name, MAX(common_name) AS common_name, local_hour, COUNT(*) AS n \
-     FROM detections WHERE local_date = ? GROUP BY scientific_name, local_hour";
+    "SELECT scientific_name, MAX(common_name) AS common_name, MAX(kind) AS kind, local_hour, \
+       COUNT(*) AS n \
+     FROM detections WHERE local_date = ?1 AND (?2 IS NULL OR kind = ?2) \
+     GROUP BY scientific_name, local_hour";
 
 const SPECIES_SUMMARY: &str = "WITH ranked AS ( \
-       SELECT id, scientific_name, common_name, confidence, detected_at_utc, clip_path, \
+       SELECT id, scientific_name, common_name, kind, confidence, detected_at_utc, clip_path, \
          ROW_NUMBER() OVER (PARTITION BY scientific_name ORDER BY confidence DESC, id DESC) AS rn, \
          ROW_NUMBER() OVER (PARTITION BY scientific_name ORDER BY (clip_path IS NULL), confidence DESC, id DESC) AS rn_clip \
-       FROM detections WHERE detected_at_utc >= ?) \
+       FROM detections WHERE detected_at_utc >= ?1 AND (?2 IS NULL OR kind = ?2)) \
      SELECT scientific_name, \
-       MAX(CASE WHEN rn = 1 THEN common_name END) AS common_name, \
+       MAX(CASE WHEN rn = 1 THEN common_name END) AS common_name, MAX(kind) AS kind, \
        COUNT(*) AS n, MIN(detected_at_utc) AS first_seen, MAX(detected_at_utc) AS last_seen, \
        MAX(confidence) AS max_confidence, \
        MAX(CASE WHEN rn = 1 THEN id END) AS best_id, \
@@ -194,6 +196,14 @@ impl SqliteStore {
     }
 }
 
+fn kind_from_row(r: &SqliteRow) -> Result<DetectionKind, StoreError> {
+    let value: String = r.try_get("kind")?;
+    DetectionKind::parse(&value).ok_or(StoreError::Corrupt {
+        column: "kind",
+        value,
+    })
+}
+
 fn record_from_row(r: &SqliteRow) -> Result<DetectionRecord, StoreError> {
     Ok(DetectionRecord {
         id: r.try_get("id")?,
@@ -211,6 +221,7 @@ fn record_from_row(r: &SqliteRow) -> Result<DetectionRecord, StoreError> {
         confidence: r.try_get::<f64, _>("confidence")? as f32,
         source_id: r.try_get("source_id")?,
         model_id: r.try_get("model_id")?,
+        kind: kind_from_row(r)?,
         clip_path: r.try_get("clip_path")?,
         clip_bytes: r
             .try_get::<Option<i64>, _>("clip_bytes")?
@@ -247,6 +258,7 @@ impl DetectionStore for SqliteStore {
                 .bind(p.overlap_seconds as f64)
                 .bind(p.min_confidence as f64)
                 .bind(&d.clip_path)
+                .bind(d.kind.as_str())
                 .execute(&mut *tx)
                 .await?;
             ids.push(r.last_insert_rowid());
@@ -300,6 +312,9 @@ impl DetectionStore for SqliteStore {
         if let Some(min) = q.min_confidence {
             qb.push(" AND confidence >= ").push_bind(min as f64);
         }
+        if let Some(kind) = q.kind {
+            qb.push(" AND kind = ").push_bind(kind.as_str());
+        }
         qb.push(match q.order {
             Order::Asc => " ORDER BY id ASC",
             Order::Desc => " ORDER BY id DESC",
@@ -309,9 +324,14 @@ impl DetectionStore for SqliteStore {
         rows.iter().map(record_from_row).collect()
     }
 
-    async fn stats_daily(&self, date: NaiveDate) -> Result<DailyStats, StoreError> {
+    async fn stats_daily(
+        &self,
+        date: NaiveDate,
+        kind: Option<DetectionKind>,
+    ) -> Result<DailyStats, StoreError> {
         let rows = sqlx::query(DAILY_STATS)
             .bind(format_date(date))
+            .bind(kind.map(DetectionKind::as_str))
             .fetch_all(&self.reader)
             .await?;
         let mut species: Vec<DailySpecies> = Vec::new();
@@ -328,6 +348,7 @@ impl DetectionStore for SqliteStore {
                     species.push(DailySpecies {
                         scientific_name,
                         common_name: r.try_get("common_name")?,
+                        kind: kind_from_row(r)?,
                         total: 0,
                         by_hour: [0; 24],
                     });
@@ -348,10 +369,12 @@ impl DetectionStore for SqliteStore {
     async fn species_summary(
         &self,
         since: Option<DateTime<Utc>>,
+        kind: Option<DetectionKind>,
     ) -> Result<Vec<SpeciesSummary>, StoreError> {
         let since = since.map(format_ts).unwrap_or_default();
         let rows = sqlx::query(SPECIES_SUMMARY)
             .bind(since)
+            .bind(kind.map(DetectionKind::as_str))
             .fetch_all(&self.reader)
             .await?;
         rows.iter()
@@ -359,6 +382,7 @@ impl DetectionStore for SqliteStore {
                 Ok(SpeciesSummary {
                     scientific_name: r.try_get("scientific_name")?,
                     common_name: r.try_get("common_name")?,
+                    kind: kind_from_row(r)?,
                     count: r.try_get::<i64, _>("n")?.max(0) as u64,
                     first_seen: parse_ts(
                         "detected_at_utc",

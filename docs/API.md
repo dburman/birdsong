@@ -58,13 +58,15 @@ Returned by the detection endpoints and as the `data` of stream events.
   "confidence": 0.752,
   "source_id": "mic0",
   "model_id": "birdnet-v2.4",
+  "kind": "animal",
   "clip_path": "2026-05-15/Black_capped_Chickadee/2026-05-15T10-00-00.000Z_mic0_0.75.flac",
   "clip_bytes": 413702,
   "spectrogram_path": "2026-05-15/Black_capped_Chickadee/2026-05-15T10-00-00.000Z_mic0_0.75.png"
 }
 ```
 
-`model_id` is `birdnet-v2.4` or `perch-v2`. `detected_at` is the start of the analysis window,
+`kind` is `animal` (a species, or an animal sound such as a dog's bark) or `sound_event` (engines,
+sirens, rain, music and other non-animal sounds). `model_id` is `birdnet-v2.4` or `perch-v2`. `detected_at` is the start of the analysis window,
 which is 3 s long for BirdNET and 5 s for Perch.
 
 `detected_at` is the start of the 3-second analysis window. `clip_bytes` is the disk space used by
@@ -121,6 +123,7 @@ Detections matching every given filter.
 | `until` | `detected_at` before this RFC 3339 time. |
 | `species` | Exact scientific name, for example `Cardinalis cardinalis`. |
 | `min_confidence` | `0` to `1`. |
+| `kind` | `animal`, `sound_event` or `all` (default): both kinds, so ingestion sees everything. |
 | `limit` | Page size, default `100`. Values above `1000` are treated as `1000`. |
 | `order` | `desc` (newest first, default) or `asc`. |
 
@@ -178,6 +181,8 @@ curl -s -o spec.png "$PI/api/v1/detections/1234/spectrogram.png"
 ### `GET /api/v1/species`
 
 One entry per species, most detections first. Optional `since` (RFC 3339); all time without it.
+`kind` is `animal` by default, like the dashboard's charts; use `sound_event` for the non-animal
+sounds, or `all`. `/stats/daily` and `/stats/recent` take the same `kind` parameter and default.
 
 ```bash
 curl -s "$PI/api/v1/species?since=2026-05-01T00:00:00Z"
@@ -281,9 +286,11 @@ birdsong_chunks_dropped_total 0
 birdsong_inference_seconds 0.312
 birdsong_seconds_since_last_chunk 1.4
 birdsong_clip_bytes 25318044
-birdsong_species_detections{scientific_name="Poecile atricapillus",common_name="Black-capped Chickadee"} 42
+birdsong_species_detections{scientific_name="Poecile atricapillus",common_name="Black-capped Chickadee",kind="animal"} 42
 birdsong_build_info{version="0.1.0",model="birdnet-v2.4",station="Backyard"} 1
 ```
+
+`birdsong_species_detections` has a `kind` label (`animal` or `sound_event`).
 
 Also exported: `birdsong_uptime_seconds`, `birdsong_masked_chunks_total`,
 `birdsong_audio_gaps_total`, `birdsong_detections_total`, `birdsong_inference_errors_total`,
