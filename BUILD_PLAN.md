@@ -1004,7 +1004,7 @@ Xeno-canto CC-BY recordings (record attribution in `tools/fixtures/README.md`).
 | **BirdNET V2.4** (default) | ~6.5k classes, 3 s @ 48 kHz, TFLite/Keras, CC BY-NC-SA. Well understood; BirdNET-Pi parity. |
 | **BirdNET V3.0 (preview, 2026)** | Evaluated in Step 0: 11 560 species, 3 s at **32 kHz**, sigmoid inside the graph (no sensitivity knob), 1 280-dim embeddings, ONNX FP32 is 516 MB. tract cannot run its ONNX `STFT` op, so it would need the same frontend split as V2.4. Pi 5 territory. Details in `docs/MODEL.md`. Also note BirdNET-Pi itself now offers a `BirdNETGo20250916` model option. |
 | BirdNET custom classifiers | BirdNET-Analyzer can train a small head on top of BirdNET embeddings for local species/dialects or new classes. Our `Classifier` trait can expose embeddings to support this later. |
-| **Google Perch** (Perch 2.0, 2025) | Apache-2.0 model, ~10k+ bird species and, in 2.0, additional non-bird taxa (mammals, amphibians, insects) `[VERIFY scope]`. 5 s @ 32 kHz input. Larger than BirdNET; likely heavy for a Pi 4, plausible on a Pi 5. Strong embeddings for few-shot / nearest-neighbour search. Best second backend. |
+| **Google Perch v2** — **implemented** (`model.kind = "perch-v2"`, decision #24) | Apache-2.0. Verified scope: 14 597 species including amphibians, insects and mammals, plus 198 FSD50K sound events. 5 s @ 32 kHz, resampled in-crate from the 48 kHz capture. The no-DFT ONNX export runs in tract at ~100 ms per window (M-series); regional slices (e.g. 999 classes, 74 MB, 265 MB peak memory) suit a Pi. 1 536-dim embeddings for later few-shot / nearest-neighbour search. Details in `docs/MODEL.md`. |
 | Merlin Sound ID (Cornell) | closed; not usable. |
 
 ### 12.2 Beyond birds

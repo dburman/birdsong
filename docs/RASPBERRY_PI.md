@@ -26,6 +26,21 @@ It downloads the two official archives (Keras and TFLite, about 200 MB) from Zen
 container, and checks that the converted model reproduces the reference results. Copy the resulting
 `models/` directory to the Pi next to `docker-compose.yml` if you ran it elsewhere.
 
+### Optional: Perch v2 instead of BirdNET
+
+Google's Perch v2 (Apache-2.0) also recognises frogs, insects and mammals. It needs no conversion,
+only curl:
+
+```bash
+scripts/fetch-perch.sh north-america-east
+```
+
+Use a regional model on a Pi (the script lists how to find the others; `full` is 413 MB and needs
+about 700 MB of memory). The script prints the `[model]` settings to use. Perch analyses 5 second
+windows, its confidences are lower than BirdNET's (start with `detection.min_confidence = 0.3`),
+the location filter does not apply, and BirdWeather uploads are turned off. Keep
+`scripts/fetch-models.sh` too if you want English common names from the BirdNET labels.
+
 ## 2. Build or copy the image
 
 On the Pi itself (about 15 to 30 minutes on a Pi 5):
@@ -110,7 +125,8 @@ it as `BIRDSONG__BIRDWEATHER__TOKEN` so it stays out of the file):
 token = "your-station-token"
 ```
 
-Uploads need `station.latitude` and `station.longitude`. Every saved clip is sent as a FLAC
+Uploads need `station.latitude` and `station.longitude` and the BirdNET model (they are turned
+off with Perch). Every saved clip is sent as a FLAC
 soundscape together with the detections in it, the same way BirdNET-Pi does. Detections hidden by
 the privacy filter have no clip and are never uploaded. Uploads run in the background: if
 BirdWeather is slow or unreachable, clips are skipped for upload rather than delayed, and

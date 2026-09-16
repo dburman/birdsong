@@ -356,3 +356,38 @@ One entry per non-obvious decision. Newest at the bottom. Format: Decision / Why
   merging them would let one noisy source confirm another's false positive); dropping the hits that
   preceded a confirmation (they are real detections, and losing them would leave gaps in the
   history and in the clip record).
+
+## 24. 2026-09-16 — Perch v2 as an optional classifier
+
+- **Decision.**
+  - `model.kind = "perch-v2"` selects Google Perch v2 (full model or a regional slice) instead of
+    BirdNET V2.4; one classifier runs at a time. It uses the ONNX export with the in-graph DFT
+    removed, which tract runs without custom operators, fetched from a pinned Hugging Face revision
+    and verified against its checksums (`scripts/fetch-perch.sh`).
+  - The window length comes from the classifier (`Classifier::window_seconds`: 3 s for BirdNET,
+    5 s for Perch) and drives the chunker, clip centring, BirdWeather offsets and `analyze`.
+    Capture stays at 48 kHz everywhere, so clips, spectrograms and the ring buffer are unchanged;
+    Perch resamples its own window to 32 kHz with an in-crate windowed-sinc resampler.
+  - Perch confidences are the softmax of its logits over all of the model's classes, as the model
+    card specifies. `detection.sensitivity` does not apply, and thresholds need recalibrating
+    (softmax scores are lower than BirdNET's sigmoid, and differ between the full model and a
+    regional slice).
+  - Perch labels have no common names; they are taken from a BirdNET labels file where the
+    scientific name matches (`model.common_names`), otherwise the scientific name is shown.
+  - The privacy filter uses a fixed list of Perch's human sound-event classes
+    (`PERCH_HUMAN_CLASSES`), with BirdNET-Pi's rank cutoff and neighbour masking.
+  - With Perch the BirdNET location model is not used, and BirdWeather uploads are turned off with
+    a warning even when a token is configured.
+- **Why.** Perch is Apache-2.0 (BirdNET is non-commercial), covers amphibians, insects and mammals
+  as well as birds, and ran at about 100 ms per 5 s window in tract with 265 MB peak memory on the
+  regional slice, which makes it practical on a Raspberry Pi. On the fixture it independently
+  reports the same Black-capped Chickadee as BirdNET. Keeping capture at 48 kHz limited the change
+  to the window length. BirdWeather labels every detection with the BirdNET version, so uploading
+  Perch results would misattribute them; the location model's outputs are indices into BirdNET's
+  label list and do not correspond to Perch's classes.
+- **Rejected.** Running BirdNET and Perch side by side (doubles CPU on a Pi; possible later with a
+  second inference thread); the `*_int8_arm` Perch builds (quantised from the graph that contains
+  the DFT, which tract cannot run); the `rubato` crate for resampling (a fixed 2:3 ratio needs two
+  kernels, about 100 lines with tests, and no new dependency); matching the privacy classes by
+  keyword (`Car_passing_by` contains "sing"); failing config validation when BirdWeather and Perch
+  are both configured (switching models would then require editing the BirdWeather section too).

@@ -16,7 +16,7 @@ use birdsong_core::config::{AudioSourceKind, DetectionConfig};
 use birdsong_core::{local_date_and_hour, week_of_year, Config, Detection};
 use birdsong_model::{
     analyze_chunk_with, ChunkAnalysis, ChunkContext, Confirmer, DynamicThresholds, ModelBundle,
-    NeighbourMask, SpeciesFilter,
+    NeighbourMask, SpeciesFilter, BIRDNET_V24_MODEL_ID,
 };
 use birdsong_store::DetectionStore;
 use chrono::{TimeDelta, Utc};
@@ -165,6 +165,7 @@ impl Pipeline {
 
         // Chunkers exist before any task starts so the clip writer can read every ring buffer.
         let window_seconds = bundle.classifier.window_seconds();
+        let model_id = bundle.classifier.model_id().to_string();
         let mut rings = HashMap::new();
         let mut prepared = Vec::with_capacity(sources.len());
         for spec in sources {
@@ -188,7 +189,15 @@ impl Pipeline {
                 .spawn(move || inference_worker(bundle, queue, results_tx, stats, detection, tz))
                 .context("starting inference thread")?
         };
-        let (upload_tx, uploads) = if cfg.birdweather.enabled() {
+        // BirdWeather records detections as BirdNET V2.4 results, so other models do not upload.
+        let birdweather = cfg.birdweather.enabled()
+            && if model_id == BIRDNET_V24_MODEL_ID {
+                true
+            } else {
+                tracing::warn!(model = %model_id, "BirdWeather uploads need BirdNET V2.4; uploads are off");
+                false
+            };
+        let (upload_tx, uploads) = if birdweather {
             let (tx, rx) = mpsc::channel(UPLOAD_CHANNEL);
             let client = Arc::new(BirdWeatherClient::new(
                 &cfg.birdweather.api_url,

@@ -39,6 +39,9 @@ pub struct PostprocessConfig {
     pub privacy_filter: bool,
     /// BirdNET-Pi: `max(10, int(6000 × privacy_threshold / 100))` ranks are checked for `Human`.
     pub human_rank_cutoff: usize,
+    /// Confidence is a softmax over all classes (Perch) instead of a per-class sigmoid (BirdNET);
+    /// `sensitivity` is then not used.
+    pub softmax: bool,
 }
 
 impl PostprocessConfig {
@@ -49,8 +52,23 @@ impl PostprocessConfig {
             top_n_per_chunk: d.top_n_per_chunk,
             privacy_filter: d.privacy_filter,
             human_rank_cutoff: human_rank_cutoff(d.privacy_threshold),
+            softmax: false,
         }
     }
+}
+
+/// Numerically stable softmax.
+pub fn softmax(logits: &[f32]) -> Vec<f32> {
+    let max = logits.iter().copied().fold(f32::NEG_INFINITY, f32::max);
+    let exp: Vec<f32> = logits.iter().map(|v| (v - max).exp()).collect();
+    let sum: f32 = exp.iter().sum();
+    exp.into_iter().map(|v| v / sum).collect()
+}
+
+/// Confidence of class `i`: from `probs` (softmax, computed once per chunk) when given, otherwise
+/// the sigmoid with sensitivity.
+fn score(logits: &[f32], probs: Option<&[f32]>, cfg: &PostprocessConfig, i: usize) -> f32 {
+    probs.map_or_else(|| cfg.sensitivity.apply(logits[i]), |p| p[i])
 }
 
 /// BirdNET-Pi `filter_humans`: `max(10, int(6000 * priv_thresh / 100.0))`.
@@ -87,11 +105,12 @@ fn ranking(logits: &[f32]) -> Vec<usize> {
 }
 
 /// Top `n` classes with confidences, ignoring every filter (for the `analyze` CLI and debugging).
-pub fn top_scores(logits: &[f32], sensitivity: SigmoidSensitivity, n: usize) -> Vec<(usize, f32)> {
+pub fn top_scores(logits: &[f32], cfg: &PostprocessConfig, n: usize) -> Vec<(usize, f32)> {
+    let probs = cfg.softmax.then(|| softmax(logits));
     ranking(logits)
         .into_iter()
         .take(n)
-        .map(|i| (i, sensitivity.apply(logits[i])))
+        .map(|i| (i, score(logits, probs.as_deref(), cfg, i)))
         .collect()
 }
 
@@ -130,12 +149,13 @@ pub fn analyze_chunk_with(
 
     let mut detections = Vec::new();
     if !human_present {
+        let probs = cfg.softmax.then(|| softmax(logits));
         for &i in ranked
             .iter()
             .filter(|&&i| filter.is_allowed(i))
             .take(cfg.top_n_per_chunk)
         {
-            let confidence = cfg.sensitivity.apply(logits[i]);
+            let confidence = score(logits, probs.as_deref(), cfg, i);
             if confidence < threshold_for(i) {
                 // Thresholds can differ per species, so a lower-ranked class may still pass.
                 continue;
@@ -253,6 +273,7 @@ mod tests {
             top_n_per_chunk: 2,
             privacy_filter: true,
             human_rank_cutoff: 2,
+            softmax: false,
         }
     }
 
@@ -340,11 +361,30 @@ mod tests {
 
     #[test]
     fn top_scores_ignores_filters() {
-        let s = SigmoidSensitivity::from_user_value(1.0);
-        let t = top_scores(&[0.0, 5.0, -1.0], s, 2);
+        let t = top_scores(&[0.0, 5.0, -1.0], &cfg(), 2);
         assert_eq!(t[0].0, 1);
         assert_eq!(t[1].0, 0);
         assert!(t[0].1 > 0.99);
+    }
+
+    #[test]
+    fn softmax_scores() {
+        let p = softmax(&[1000.0, 1000.0, f32::NEG_INFINITY]);
+        assert!((p[0] - 0.5).abs() < 1e-6 && (p[1] - 0.5).abs() < 1e-6 && p[2] == 0.0);
+
+        let l = labels();
+        let all = SpeciesFilter::allow_all(5);
+        let mut c = cfg();
+        c.softmax = true;
+        c.min_confidence = 0.5;
+        // A clearly ahead of B: a sigmoid would pass both, the softmax only A.
+        let logits = [4.0, 2.0, 0.0, 0.0, -9.0];
+        let r = analyze_chunk(&logits, &l, &all, &c, &ctx());
+        assert_eq!(r.detections.len(), 1);
+        let expected = softmax(&logits)[0];
+        assert!((r.detections[0].confidence - expected).abs() < 1e-6);
+        let t = top_scores(&logits, &c, 2);
+        assert!((t[0].1 + t[1].1) < 1.0);
     }
 
     fn chunk(n: u32, human: bool) -> ChunkAnalysis {

@@ -166,14 +166,30 @@ impl Default for DetectionConfig {
     }
 }
 
+/// Which classifier `model.classifier` is.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub enum ModelKind {
+    /// BirdNET V2.4: 3 s windows, sigmoid confidences, location filter.
+    #[default]
+    #[serde(rename = "birdnet-v2.4")]
+    BirdnetV24,
+    /// Google Perch v2 (full or regional): 5 s windows, softmax confidences, birds and other
+    /// animals. BirdWeather uploads are not made with it.
+    #[serde(rename = "perch-v2")]
+    PerchV2,
+}
+
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields, default)]
 pub struct ModelConfig {
     pub dir: PathBuf,
-    /// Headless classifier ONNX, relative to `dir` (see `docs/MODEL.md`).
+    pub kind: ModelKind,
+    /// Classifier ONNX, relative to `dir` (see `docs/MODEL.md`).
     pub classifier: String,
     /// Labels file, relative to `dir`.
     pub labels: String,
+    /// Perch only: a BirdNET labels file (relative to `dir`) to take common names from.
+    pub common_names: Option<String>,
     /// Location/week model ONNX, relative to `dir`. `None` disables the location filter.
     pub meta_model: Option<String>,
     /// Precomputed allowed-species list; when set, `meta_model` is ignored.
@@ -186,8 +202,10 @@ impl Default for ModelConfig {
     fn default() -> Self {
         Self {
             dir: PathBuf::from("/models"),
+            kind: ModelKind::BirdnetV24,
             classifier: "birdnet-v2.4-headless.onnx".into(),
             labels: "labels/en_us.txt".into(),
+            common_names: None,
             meta_model: Some("meta-model.onnx".into()),
             species_list: None,
             threads: 0,
@@ -204,6 +222,9 @@ impl ModelConfig {
     }
     pub fn meta_model_path(&self) -> Option<PathBuf> {
         self.meta_model.as_ref().map(|m| self.dir.join(m))
+    }
+    pub fn common_names_path(&self) -> Option<PathBuf> {
+        self.common_names.as_ref().map(|m| self.dir.join(m))
     }
 }
 
@@ -652,6 +673,7 @@ device = "hw:1,0"
     fn birdweather_needs_a_location_and_a_clean_token() {
         let cfg = Config::from_toml(MINIMAL).unwrap();
         assert!(!cfg.birdweather.enabled());
+        assert_eq!(cfg.model.kind, ModelKind::BirdnetV24);
         let located = format!("{MINIMAL}\n[station]\nlatitude = 42.36\nlongitude = -71.06");
         let ok =
             Config::from_toml(&format!("{located}\n[birdweather]\ntoken = \"abc_123-X\"")).unwrap();

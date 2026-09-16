@@ -1,7 +1,9 @@
+use birdsong_core::config::ModelKind;
 use birdsong_core::Config;
 
 use crate::{
-    Classifier, Labels, MetaModel, ModelError, PostprocessConfig, SpeciesFilter, TractClassifier,
+    Classifier, Labels, MetaModel, ModelError, PerchClassifier, PostprocessConfig, SpeciesFilter,
+    TractClassifier,
 };
 
 /// Where a bundle's species filter comes from.
@@ -44,8 +46,23 @@ impl ModelBundle {
     /// `model.threads` is currently unused: tract runs single-threaded and the pipeline decides
     /// how many inference workers to run.
     pub fn load(cfg: &Config) -> Result<Self, ModelError> {
-        let classifier = TractClassifier::load(&cfg.model.classifier_path())?;
-        let labels = Labels::load(&cfg.model.labels_path())?;
+        let (classifier, labels): (Box<dyn Classifier>, Labels) = match cfg.model.kind {
+            ModelKind::BirdnetV24 => (
+                Box::new(TractClassifier::load(&cfg.model.classifier_path())?),
+                Labels::load(&cfg.model.labels_path())?,
+            ),
+            ModelKind::PerchV2 => {
+                let common = cfg
+                    .model
+                    .common_names_path()
+                    .map(|p| Labels::load(&p))
+                    .transpose()?;
+                (
+                    Box::new(PerchClassifier::load(&cfg.model.classifier_path())?),
+                    Labels::load_perch(&cfg.model.labels_path(), common.as_ref())?,
+                )
+            }
+        };
         if labels.len() != classifier.num_classes() {
             return Err(ModelError::Config(format!(
                 "labels file has {} entries but the classifier has {} outputs",
@@ -66,7 +83,15 @@ impl ModelBundle {
             .station
             .has_location()
             .then_some((cfg.station.latitude, cfg.station.longitude));
+        let birdnet = cfg.model.kind == ModelKind::BirdnetV24;
         let meta_model = match (&static_list, location, cfg.model.meta_model_path()) {
+            (None, Some(_), Some(_)) if !birdnet => {
+                tracing::info!(
+                    "the location filter only works with BirdNET; use a regional Perch model or \
+                     model.species_list to restrict species"
+                );
+                None
+            }
             (None, Some(_), Some(path)) => Some(MetaModel::load(&path)?),
             (None, Some(_), None) => {
                 tracing::warn!(
@@ -84,10 +109,13 @@ impl ModelBundle {
             }
         };
 
+        let mut postprocess = PostprocessConfig::from_detection_config(&cfg.detection);
+        postprocess.softmax = !birdnet;
+
         Ok(Self {
-            classifier: Box::new(classifier),
+            classifier,
             labels,
-            postprocess: PostprocessConfig::from_detection_config(&cfg.detection),
+            postprocess,
             meta_model,
             static_list,
             location,

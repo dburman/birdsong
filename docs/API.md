@@ -64,6 +64,9 @@ Returned by the detection endpoints and as the `data` of stream events.
 }
 ```
 
+`model_id` is `birdnet-v2.4` or `perch-v2`. `detected_at` is the start of the analysis window,
+which is 3 s long for BirdNET and 5 s for Perch.
+
 `detected_at` is the start of the 3-second analysis window. `clip_bytes` is the disk space used by
 the clip's audio and spectrogram together, which is what `retention.clip_max_total_mb` counts.
 `clip_path` and `spectrogram_path` become `null` when the retention window deletes the files; the

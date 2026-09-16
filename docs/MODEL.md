@@ -109,6 +109,47 @@ For comparison the TFLite interpreter (XNNPACK) needs 18.8 ms per chunk on the s
 is at parity. A Pi 4 core is very roughly 10–20× slower than an M-series core; the expected
 0.3–0.6 s per chunk is comfortably inside budget, but this **must be measured** (Step 10).
 
+## Perch v2 (optional classifier, `model.kind = "perch-v2"`)
+
+| Item | Value |
+|------|-------|
+| Source | Google Research, [bird-vocalization-classifier](https://www.kaggle.com/models/google/bird-vocalization-classifier/) v2. ONNX conversion with the DFT replaced by matrix multiplication by justinchuby; regional slices by tphakala: [tphakala/Perch-v2-Models](https://huggingface.co/tphakala/Perch-v2-Models), pinned to revision `1214b70a9c14a855e366fe285f8df0e031d7b137` |
+| License | **Apache-2.0** (commercial use allowed) |
+| Input | 5.0 s at **32 000 Hz** = 160 000 float32 samples, `[1, 160000]`. Birdsong captures at 48 kHz and resamples each 5 s window (240 000 samples) inside the classifier: windowed-sinc, Blackman window, 128 taps, cutoff 14.5 kHz (`crates/birdsong-model/src/resample.rs`) |
+| Outputs | 0: embedding `[1, 1536]`; 1: spatial embedding `[1, 16, 4, 1536]`; 2: spectrogram `[1, 500, 128]`; **3: class logits** `[1, N]`. Birdsong uses output 3 and applies a softmax over all N classes, so `detection.sensitivity` has no effect |
+| Classes | full model: 14 795 = 14 597 species (birds, amphibians, insects, mammals) + 198 FSD50K sound events. Regional slices keep the species expected in a region plus the sound events and are bit-exact to the full model on those classes (`north-america-east`: 999 = 801 species + 198 events). Because the softmax runs over fewer classes, the same sound scores higher on a regional slice: recalibrate `detection.min_confidence` per model |
+| Labels | one class per line: species as `Genus species` (no common name), sound events as `Words_with_underscores`. The full file starts with a header line `inat2024_fsd50k`, which is skipped. Common names come from a BirdNET labels file (`model.common_names`) where the scientific name matches: 635 of the 801 `north-america-east` species, 6 262 of the 14 597 in the full model; the rest show the scientific name |
+| Privacy filter | the 35 FSD50K classes in `PERCH_HUMAN_CLASSES` (`crates/birdsong-model/src/labels.rs`): voices (speech, conversation, singing, laughter, shouting, whispering, crying) and body or activity sounds (footsteps, coughs, sneezes, breathing, clapping), matching BirdNET's `Human vocal` / `Human non-vocal`. `Speech_synthesizer` is excluded. The rank cutoff is the same as for BirdNET |
+| Not available with Perch | the BirdNET location/week model (its outputs are BirdNET's classes; choose a regional slice or `model.species_list` instead) and BirdWeather uploads (BirdWeather records detections as BirdNET V2.4 results) |
+
+### Files (`scripts/fetch-perch.sh [REGION]`, under `models/perch/`, git-ignored)
+
+| File | Size | SHA-256 |
+|------|-----:|---------|
+| `perch_v2_north-america-east_no_dft_fp32.onnx` | 73 901 012 | `80d640c44e0775a7ef68967e5d9f073970d918486c7686ac4a14c77f3bab5d71` |
+| `perch_v2_north-america-east_labels.txt` | 17 860 | `fc43269a24c11481b4bccd1564e80a9b1974f704601fa520ef467374fe71d71f` |
+| `perch_v2_no_dft_fp32.onnx` (`full`) | 413 350 933 | `4dcf71c18a147198545944bb5149697e89e3ad2e16637fa8f0edf6d13035a017` |
+| `perch_v2_labels.txt` (`full`) | 312 716 | `e4d5c0397d8fb08bf90c6b13a34810af53504faad927e472fcc567793c9de057` |
+
+The script verifies every file against the repository's `SHA256SUMS` at the pinned revision. The
+`*_int8_arm.onnx` variants were quantised from the graph that still contains the DFT and are not
+supported.
+
+### Verification and benchmarks (Apple M-series, single thread, tract 0.23.7, release build)
+
+| Check | Result |
+|-------|--------|
+| tract loads and optimises the no-DFT graph | yes, no custom ops |
+| Fixture window 0–5 s, `north-america-east` | Black-capped Chickadee 0.649 (0.698 when the file is resampled with ffmpeg instead), the species BirdNET reports; windows 2 and 3: House Finch 0.587 / 0.447 (ffmpeg: 0.585 / 0.436); same top-3 order in every window |
+| Resampling one window | 12.6 ms |
+| Inference one window | ~100 ms (5 s of audio: about 50× faster than real time) |
+| `birdsong analyze` on the 15 s fixture | 1.07 s wall clock, 265 MB peak memory |
+
+Per second of audio Perch costs about 2.5× BirdNET V2.4. Scaling by the same 10–20× Pi 4 factor
+as above gives roughly 1–2.5 s per 5 s window: inside the budget for one source on a Pi 4, with
+more headroom on a Pi 5. **Not yet measured on a Pi.** Prefer a regional slice there; the full
+model needs about 700 MB of memory.
+
 ## BirdNET V3.0 (evaluated, not adopted yet)
 
 | Item | Value |

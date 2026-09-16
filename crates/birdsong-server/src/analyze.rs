@@ -118,6 +118,8 @@ pub struct AnalysisReport {
     pub species_filter_threshold: f32,
     pub sensitivity: f32,
     pub sigmoid_slope: f32,
+    /// `"sigmoid"` (BirdNET) or `"softmax"` (Perch; sensitivity not used).
+    pub scores: &'static str,
     pub min_confidence: f32,
     pub top_n_per_chunk: usize,
     pub overlap_seconds: f32,
@@ -249,7 +251,7 @@ pub fn analyze_samples(
             .classifier
             .predict(&chunk.samples)
             .with_context(|| format!("chunk {index}"))?;
-        let top = top_scores(&logits, sensitivity, opts.top)
+        let top = top_scores(&logits, &bundle.postprocess, opts.top)
             .into_iter()
             .enumerate()
             .map(|(rank, (i, confidence))| {
@@ -368,6 +370,11 @@ pub fn analyze_samples(
         species_filter_threshold: bundle.species_filter_threshold(),
         sensitivity: cfg.detection.sensitivity,
         sigmoid_slope: sensitivity.slope(),
+        scores: if bundle.postprocess.softmax {
+            "softmax"
+        } else {
+            "sigmoid"
+        },
         min_confidence: bundle.postprocess.min_confidence,
         top_n_per_chunk: bundle.postprocess.top_n_per_chunk,
         overlap_seconds: cfg.detection.overlap_seconds,
@@ -408,11 +415,17 @@ pub fn render_text(r: &AnalysisReport) -> String {
             r.allowed_species
         ),
     };
+    let scoring = if r.scores == "softmax" {
+        "softmax scores".to_string()
+    } else {
+        format!(
+            "sensitivity {} (slope {:.2})",
+            r.sensitivity, r.sigmoid_slope
+        )
+    };
     let _ = writeln!(
         out,
-        "{filter}  sensitivity {} (slope {:.2})  min confidence {:.2}  top {} per chunk  privacy filter {}",
-        r.sensitivity,
-        r.sigmoid_slope,
+        "{filter}  {scoring}  min confidence {:.2}  top {} per chunk  privacy filter {}",
         r.min_confidence,
         r.top_n_per_chunk,
         if r.privacy_filter { "on" } else { "off" }

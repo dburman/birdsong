@@ -41,11 +41,19 @@ dynamic_threshold_hours = 24
 
 [model]
 dir = "/models"
+kind = "birdnet-v2.4"                        # or "perch-v2" (see below and docs/MODEL.md)
 classifier = "birdnet-v2.4-headless.onnx"   # see docs/MODEL.md
 labels = "labels/en_us.txt"
 meta_model = "meta-model.onnx"              # location/week filter; remove to disable
 # species_list = "/config/species.txt"      # precomputed allowed list; overrides meta_model
 threads = 0                                  # 0 = CPUs - 1
+# Perch v2 instead (scripts/fetch-perch.sh): 5 s windows, softmax confidences, birds plus frogs,
+# insects and mammals. Pick a regional model for a Raspberry Pi. meta_model is not used and
+# BirdWeather uploads are turned off; recalibrate detection.min_confidence (softmax scores run lower).
+# kind = "perch-v2"
+# classifier = "perch/perch_v2_north-america-east_no_dft_fp32.onnx"
+# labels = "perch/perch_v2_north-america-east_labels.txt"
+# common_names = "labels/en_us.txt"          # BirdNET labels, for English common names
 
 [storage]
 data_dir = "/data"
