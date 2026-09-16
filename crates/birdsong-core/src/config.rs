@@ -179,6 +179,28 @@ pub enum ModelKind {
     PerchV2,
 }
 
+/// What the location filter does with Perch species that BirdNET's location model does not know.
+///
+/// Serialised as `"allow"` / `"block"`.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum UnmappedSpecies {
+    /// Report them (amphibians, insects and mammals outside BirdNET's list stay detectable).
+    #[default]
+    Allow,
+    /// Never report them.
+    Block,
+}
+
+impl UnmappedSpecies {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Allow => "allow",
+            Self::Block => "block",
+        }
+    }
+}
+
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields, default)]
 pub struct ModelConfig {
@@ -188,8 +210,11 @@ pub struct ModelConfig {
     pub classifier: String,
     /// Labels file, relative to `dir`.
     pub labels: String,
-    /// Perch only: a BirdNET labels file (relative to `dir`) to take common names from.
+    /// Perch only: a BirdNET labels file (relative to `dir`) to take common names from. Also needed
+    /// for the location filter, which maps Perch species to BirdNET's by scientific name.
     pub common_names: Option<String>,
+    /// Perch only: species the location model cannot score (not in BirdNET's labels).
+    pub location_filter_unmapped: UnmappedSpecies,
     /// Location/week model ONNX, relative to `dir`. `None` disables the location filter.
     pub meta_model: Option<String>,
     /// Precomputed allowed-species list; when set, `meta_model` is ignored.
@@ -206,6 +231,7 @@ impl Default for ModelConfig {
             classifier: "birdnet-v2.4-headless.onnx".into(),
             labels: "labels/en_us.txt".into(),
             common_names: None,
+            location_filter_unmapped: UnmappedSpecies::Allow,
             meta_model: Some("meta-model.onnx".into()),
             species_list: None,
             threads: 0,

@@ -123,7 +123,8 @@ about 9× slower than an M-series core here.
 | Labels | one class per line: species as `Genus species` (no common name), sound events as `Words_with_underscores`. The full file starts with a header line `inat2024_fsd50k`, which is skipped. Common names come from a BirdNET labels file (`model.common_names`) where the scientific name matches: 635 of the 801 `north-america-east` species, 6 262 of the 14 597 in the full model; the rest show the scientific name |
 | Privacy filter | the 35 FSD50K classes in `PERCH_HUMAN_CLASSES` (`crates/birdsong-model/src/labels.rs`): voices (speech, conversation, singing, laughter, shouting, whispering, crying) and body or activity sounds (footsteps, coughs, sneezes, breathing, clapping), matching BirdNET's `Human vocal` / `Human non-vocal`. `Speech_synthesizer` is excluded. The rank cutoff is the same as for BirdNET |
 | Sound events | species and the animal sound events (`PERCH_ANIMAL_EVENTS`: dog, cat, frog, cricket, insect, …) are stored as `kind = "animal"`; the other 180 sound events (engines, rain, music, people) as `kind = "sound_event"`, kept out of the charts (decision #25) |
-| Not available with Perch | the BirdNET location/week model (its outputs are BirdNET's classes; choose a regional slice or `model.species_list` instead) and BirdWeather uploads (BirdWeather records detections as BirdNET V2.4 results) |
+| Location filter | BirdNET's location/week model, mapped to Perch classes by scientific name (needs `model.common_names` and `model.meta_model`). Of the full model's 14 597 species, 6 262 have a BirdNET name and are filtered by location; the other 8 335 (other taxa, and birds under a different scientific name, such as `Coloeus monedula` for BirdNET's `Corvus monedula`) are allowed by default or blocked with `model.location_filter_unmapped = "block"`. Sound events are never filtered |
+| Not available with Perch | BirdWeather uploads (BirdWeather records detections as BirdNET V2.4 results) |
 
 ### Files (`scripts/fetch-perch.sh [REGION]`, under `models/perch/`, git-ignored)
 
@@ -175,14 +176,16 @@ detections are not ground truth: a disagreement can be either model's mistake.
 | Birdsong, BirdNET V2.4 (FP32) | **317 / 317** | 317 / 317 | median difference from BirdNET-Pi 0.0004, all but one within 0.01, max 0.036 (FP16 vs FP32) |
 | Perch v2 `north-america-east` | 255 (80 %) | 289 (91 %) | median 0.79 |
 | Perch v2 `full`, no species filter | 255 (80 %) | 291 (92 %) | median 0.68 |
-| Perch v2 `full` + the 227 species BirdNET's location model allows there year-round (`model.species_list`) | 262 (83 %) | 298 (94 %) | median 0.68 |
+| Perch v2 `full` + the 227 species BirdNET's location model allows there year-round, other species blocked | 262 (83 %) | 298 (94 %) | median 0.68 |
+| Perch v2 `full` + the same list, species BirdNET cannot score allowed (the default location filter) | 260 (82 %) | 298 (94 %) | median 0.68 |
 
 - **Regional slices can miss local species.** Hairy Woodpecker (*Dryobates villosus*), common at
   the station, is not in the `north-america-east` slice, so that model can never report it. The
-  full model with a species list avoids this.
+  full model with the location filter avoids this.
 - Without a species filter the full model's top pick was sometimes a species that does not occur
-  there (Goldcrest, Australian King-Parrot, Jackdaw, Eurasian Dotterel); a species list removes
-  those.
+  there (Goldcrest, Australian King-Parrot, Jackdaw, Eurasian Dotterel); the location filter removes
+  those. Allowing the species BirdNET cannot score cost two clips of agreement (one Jackdaw under
+  its other scientific name), so allowing them is the default.
 - The remaining disagreements are mostly between similar species: Yellow-throated Vireo,
   Yellow-bellied Flycatcher and American Redstart heard as Red-eyed Vireo; American Crow as Common
   Raven; Black-throated Green Warbler as Eastern Wood-Pewee. Listening to those clips is the only

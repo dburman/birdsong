@@ -35,6 +35,30 @@ impl SpeciesFilter {
         })
     }
 
+    /// For a classifier whose labels differ from the location model's (Perch): `map[i]` is the
+    /// location-model index of class `i`, found by scientific name. Mapped classes are allowed when
+    /// their probability is at least `threshold`; unmapped species follow `allow_unmapped`; classes
+    /// that are not species (sound events) are always allowed.
+    pub fn from_mapped_scores(
+        probs: &[f32],
+        map: &[Option<usize>],
+        threshold: f32,
+        allow_unmapped: bool,
+        is_species: impl Fn(usize) -> bool,
+    ) -> Self {
+        Self {
+            allowed: map
+                .iter()
+                .enumerate()
+                .map(|(i, m)| match m {
+                    Some(j) => probs.get(*j).is_some_and(|&p| p >= threshold),
+                    None if is_species(i) => allow_unmapped,
+                    None => true,
+                })
+                .collect(),
+        }
+    }
+
     /// Allowed = species listed in a text file, one `Scientific name` or `Scientific name_Common name`
     /// per line (`#` comments and blank lines ignored).
     ///
@@ -122,6 +146,24 @@ mod tests {
 
     fn labels() -> Labels {
         Labels::parse("A_a\nB_b\nC_c\nHuman vocal_Human vocal\n").unwrap()
+    }
+
+    #[test]
+    fn mapped_scores() {
+        // Classes: mapped A (score 0.5), mapped B (0.01), unmapped species, sound event.
+        let map = [Some(1), Some(0), None, None];
+        let probs = [0.01, 0.5];
+        let species = |i: usize| i < 3;
+        let f = SpeciesFilter::from_mapped_scores(&probs, &map, 0.03, true, species);
+        let allowed: Vec<_> = (0..4).map(|i| f.is_allowed(i)).collect();
+        assert_eq!(allowed, [true, false, true, true]);
+        let f = SpeciesFilter::from_mapped_scores(&probs, &map, 0.03, false, species);
+        let allowed: Vec<_> = (0..4).map(|i| f.is_allowed(i)).collect();
+        assert_eq!(
+            allowed,
+            [true, false, false, true],
+            "sound events are never blocked"
+        );
     }
 
     #[test]

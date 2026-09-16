@@ -414,3 +414,21 @@ One entry per non-obvious decision. Newest at the bottom. Format: Decision / Why
   a third `human` kind (people are masked by the privacy filter in the default configuration);
   treating the ambiguous classes as animals (they are usually mechanical); defaulting
   `/detections` to animals (would silently change what existing ingestion receives).
+
+## 26. 2026-09-16 — Perch uses BirdNET's location model, matched by scientific name
+
+- **Decision.** With `model.kind = "perch-v2"`, a station location, `model.meta_model` and
+  `model.common_names` (BirdNET's labels), each Perch species is matched to BirdNET's label with
+  the same scientific name and allowed when BirdNET's location model scores it at least
+  `detection.species_filter_threshold` for the week. Species BirdNET does not know follow
+  `model.location_filter_unmapped` (`allow`, the default, or `block`); sound events are never
+  filtered. `birdsong species-list` shows no score for unmatched species.
+- **Why.** On 317 clips from a BirdNET-Pi station the full Perch model, unfiltered, sometimes chose
+  species from other continents, and the regional slice lacked a common local woodpecker. With the
+  location filter the full model agreed with BirdNET-Pi on 82–83 % of clips instead of 80 %.
+  Allowing unmatched species cost two clips while keeping the amphibians, insects and mammals that
+  BirdNET does not cover, so it is the default.
+- **Rejected.** A taxonomy synonym table (would fix names like `Coloeus monedula` / `Corvus
+  monedula`, but needs a maintained source; revisit if unmatched birds prove a problem); requiring
+  a hand-made `model.species_list` (easy to get wrong, and it does not follow the season);
+  Perch-specific geographic models (none published).

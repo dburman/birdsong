@@ -37,11 +37,11 @@ scripts/fetch-perch.sh north-america-east
 
 On a Pi 4 a regional model analyses a 5 second window in about 1.7 s on one core using 245 MiB;
 `full` (413 MB) takes about 2.7 s and 1.1 GB, so it needs a Pi with 2 GB or more. A regional model
-can miss local species (see `docs/MODEL.md`); with enough memory, `full` plus
-`model.species_list` is the more complete choice. The script prints the `[model]` settings to use. Perch analyses 5 second
+can miss local species (see `docs/MODEL.md`); with enough memory, `full` with the location filter
+(`model.meta_model` and `model.common_names` set) is the more complete choice. The script prints the `[model]` settings to use. Perch analyses 5 second
 windows, its confidences are lower than BirdNET's (start with `detection.min_confidence = 0.3`),
-the location filter does not apply, and BirdWeather uploads are turned off. Keep
-`scripts/fetch-models.sh` too if you want English common names from the BirdNET labels.
+and BirdWeather uploads are turned off. Keep `scripts/fetch-models.sh` too: the BirdNET labels and
+location model give Perch English common names and the location filter.
 
 ## 2. Build or copy the image
 

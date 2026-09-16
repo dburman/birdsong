@@ -70,6 +70,75 @@ common_names = "labels/en_us.txt"
     assert!(bundle.classifier.predict(&audio[..144_000]).is_err());
 }
 
+#[test]
+fn perch_location_filter_uses_birdnets_location_model() {
+    let models = repo_root().join("models");
+    if !models.join(ONNX).exists() || !models.join("meta-model.onnx").exists() {
+        eprintln!("skipping: Perch or BirdNET location model not present");
+        return;
+    }
+    let config = |unmapped: &str| {
+        Config::from_toml(&format!(
+            r#"
+[station]
+latitude = 42.36
+longitude = -71.06
+[[audio.sources]]
+id = "file0"
+kind = "file"
+path = "unused.wav"
+[model]
+dir = {dir:?}
+kind = "perch-v2"
+classifier = "{ONNX}"
+labels = "perch/perch_v2_north-america-east_labels.txt"
+common_names = "labels/en_us.txt"
+meta_model = "meta-model.onnx"
+location_filter_unmapped = "{unmapped}"
+"#,
+            dir = models.display().to_string(),
+        ))
+        .unwrap()
+    };
+    let bundle = ModelBundle::load(&config("allow")).unwrap();
+    assert!(bundle.has_species_filter());
+    let filter = bundle.species_filter_for_week(20).unwrap();
+    let index = |name: &str| bundle.labels.index_of_scientific(name).unwrap();
+    assert!(
+        filter.is_allowed(index("Poecile atricapillus")),
+        "chickadees live in Boston"
+    );
+    assert!(
+        filter.is_allowed(index("Rain")),
+        "sound events are not filtered"
+    );
+    let unmapped = (0..bundle.labels.len())
+        .find(|&i| {
+            let l = bundle.labels.get(i).unwrap();
+            l.scientific.contains(' ') && l.common == l.scientific
+        })
+        .expect("a species without a BirdNET name");
+    assert!(
+        filter.is_allowed(unmapped),
+        "unmapped species are allowed by default"
+    );
+    let allowed = (0..bundle.labels.len())
+        .filter(|&i| filter.is_allowed(i))
+        .count();
+    assert!(
+        allowed < bundle.labels.len(),
+        "the filter removes something"
+    );
+    let scores = bundle.location_scores_for_week(20).unwrap().unwrap();
+    assert!(scores[index("Poecile atricapillus")] >= 0.03);
+    assert!(scores[unmapped].is_nan());
+
+    let blocking = ModelBundle::load(&config("block")).unwrap();
+    let filter = blocking.species_filter_for_week(20).unwrap();
+    assert!(!filter.is_allowed(unmapped));
+    assert!(filter.is_allowed(index("Rain")));
+}
+
 /// The full 14 795-class model uses a symbolic batch size inside the graph as well. Run with
 /// `cargo test --release -p birdsong-model --test perch_v2 -- --ignored` after
 /// `scripts/fetch-perch.sh full`.

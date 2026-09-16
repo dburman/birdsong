@@ -48,12 +48,13 @@ meta_model = "meta-model.onnx"              # location/week filter; remove to di
 # species_list = "/config/species.txt"      # precomputed allowed list; overrides meta_model
 threads = 0                                  # 0 = CPUs - 1
 # Perch v2 instead (scripts/fetch-perch.sh): 5 s windows, softmax confidences, birds plus frogs,
-# insects and mammals. Pick a regional model for a Raspberry Pi. meta_model is not used and
-# BirdWeather uploads are turned off; recalibrate detection.min_confidence (softmax scores run lower).
+# insects and mammals. BirdWeather uploads are turned off; recalibrate detection.min_confidence
+# (softmax scores run lower). The location filter maps Perch species to BirdNET's by name.
 # kind = "perch-v2"
-# classifier = "perch/perch_v2_north-america-east_no_dft_fp32.onnx"
-# labels = "perch/perch_v2_north-america-east_labels.txt"
-# common_names = "labels/en_us.txt"          # BirdNET labels, for English common names
+# classifier = "perch/perch_v2_no_dft_fp32.onnx"
+# labels = "perch/perch_v2_labels.txt"
+# common_names = "labels/en_us.txt"          # BirdNET labels: common names and the location filter
+# location_filter_unmapped = "allow"         # Perch species BirdNET does not know: "allow" or "block"
 
 [storage]
 data_dir = "/data"

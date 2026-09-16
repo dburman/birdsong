@@ -229,6 +229,14 @@ impl Labels {
         self.entries.iter()
     }
 
+    /// For each class, the index of the class in `other` with the same scientific name.
+    pub fn map_to(&self, other: &Labels) -> Vec<Option<usize>> {
+        self.entries
+            .iter()
+            .map(|l| other.index_of_scientific(&l.scientific))
+            .collect()
+    }
+
     /// Class index for a scientific name (exact match).
     pub fn index_of_scientific(&self, scientific: &str) -> Option<usize> {
         self.by_scientific.get(scientific).copied()
@@ -342,6 +350,13 @@ mod tests {
             l.iter().filter(|x| x.sound_event).count(),
             198 - PERCH_ANIMAL_EVENTS.len()
         );
+    }
+
+    #[test]
+    fn map_by_scientific_name() {
+        let birdnet = Labels::parse("B b_Bee\nA a_Ay\n").unwrap();
+        let perch = Labels::parse_perch("A a\nC c\nRain\n", Some(&birdnet)).unwrap();
+        assert_eq!(perch.map_to(&birdnet), [Some(1), None, None]);
     }
 
     #[test]

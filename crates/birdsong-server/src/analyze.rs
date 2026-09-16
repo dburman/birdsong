@@ -539,7 +539,10 @@ pub fn species_list(bundle: &ModelBundle, week: i32) -> anyhow::Result<SpeciesLi
             class_index: i,
             scientific_name: l.scientific.clone(),
             common_name: l.common.clone(),
-            score: scores.as_ref().and_then(|s| s.get(i).copied()),
+            score: scores
+                .as_ref()
+                .and_then(|s| s.get(i).copied())
+                .filter(|v| !v.is_nan()),
         })
         .collect();
     species.sort_by(|a, b| {

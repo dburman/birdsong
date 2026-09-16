@@ -1,4 +1,4 @@
-use birdsong_core::config::ModelKind;
+use birdsong_core::config::{ModelKind, UnmappedSpecies};
 use birdsong_core::Config;
 
 use crate::{
@@ -33,6 +33,10 @@ pub struct ModelBundle {
     pub labels: Labels,
     pub postprocess: PostprocessConfig,
     meta_model: Option<MetaModel>,
+    /// Perch: location-model index for each class; `None` for BirdNET, whose classes are the
+    /// location model's.
+    meta_map: Option<Vec<Option<usize>>>,
+    allow_unmapped: bool,
     static_list: Option<SpeciesFilter>,
     location: Option<(f64, f64)>,
     species_filter_threshold: f32,
@@ -46,20 +50,21 @@ impl ModelBundle {
     /// `model.threads` is currently unused: tract runs single-threaded and the pipeline decides
     /// how many inference workers to run.
     pub fn load(cfg: &Config) -> Result<Self, ModelError> {
+        let mut birdnet_labels = None;
         let (classifier, labels): (Box<dyn Classifier>, Labels) = match cfg.model.kind {
             ModelKind::BirdnetV24 => (
                 Box::new(TractClassifier::load(&cfg.model.classifier_path())?),
                 Labels::load(&cfg.model.labels_path())?,
             ),
             ModelKind::PerchV2 => {
-                let common = cfg
+                birdnet_labels = cfg
                     .model
                     .common_names_path()
                     .map(|p| Labels::load(&p))
                     .transpose()?;
                 (
                     Box::new(PerchClassifier::load(&cfg.model.classifier_path())?),
-                    Labels::load_perch(&cfg.model.labels_path(), common.as_ref())?,
+                    Labels::load_perch(&cfg.model.labels_path(), birdnet_labels.as_ref())?,
                 )
             }
         };
@@ -85,10 +90,10 @@ impl ModelBundle {
             .then_some((cfg.station.latitude, cfg.station.longitude));
         let birdnet = cfg.model.kind == ModelKind::BirdnetV24;
         let meta_model = match (&static_list, location, cfg.model.meta_model_path()) {
-            (None, Some(_), Some(_)) if !birdnet => {
-                tracing::info!(
-                    "the location filter only works with BirdNET; use a regional Perch model or \
-                     model.species_list to restrict species"
+            (None, Some(_), Some(_)) if !birdnet && birdnet_labels.is_none() => {
+                tracing::warn!(
+                    "the Perch location filter needs model.common_names (BirdNET's labels) to map \
+                     species; no location filter"
                 );
                 None
             }
@@ -109,6 +114,25 @@ impl ModelBundle {
             }
         };
 
+        // BirdNET's location model scores BirdNET's classes; Perch classes are matched by name.
+        let meta_map = match (&meta_model, &birdnet_labels) {
+            (Some(_), Some(birdnet_labels)) if !birdnet => {
+                let map = labels.map_to(birdnet_labels);
+                let species = (0..labels.len())
+                    .filter(|&i| is_species(&labels, i))
+                    .count();
+                let mapped = map.iter().filter(|m| m.is_some()).count();
+                tracing::info!(
+                    species,
+                    mapped,
+                    unmapped = cfg.model.location_filter_unmapped.as_str(),
+                    "Perch location filter uses BirdNET's location model"
+                );
+                Some(map)
+            }
+            _ => None,
+        };
+
         let mut postprocess = PostprocessConfig::from_detection_config(&cfg.detection);
         postprocess.softmax = !birdnet;
 
@@ -117,6 +141,8 @@ impl ModelBundle {
             labels,
             postprocess,
             meta_model,
+            meta_map,
+            allow_unmapped: cfg.model.location_filter_unmapped == UnmappedSpecies::Allow,
             static_list,
             location,
             species_filter_threshold: cfg.detection.species_filter_threshold,
@@ -130,9 +156,22 @@ impl ModelBundle {
     pub fn species_filter_for_week(&self, week: i32) -> Result<SpeciesFilter, ModelError> {
         let base = match (&self.static_list, &self.meta_model, self.location) {
             (Some(list), _, _) => list.clone(),
-            (None, Some(meta), Some((lat, lon))) => {
-                SpeciesFilter::from_meta_model(meta, lat, lon, week, self.species_filter_threshold)?
-            }
+            (None, Some(meta), Some((lat, lon))) => match &self.meta_map {
+                None => SpeciesFilter::from_meta_model(
+                    meta,
+                    lat,
+                    lon,
+                    week,
+                    self.species_filter_threshold,
+                )?,
+                Some(map) => SpeciesFilter::from_mapped_scores(
+                    &meta.predict(lat, lon, week)?,
+                    map,
+                    self.species_filter_threshold,
+                    self.allow_unmapped,
+                    |i| is_species(&self.labels, i),
+                ),
+            },
             _ => SpeciesFilter::allow_all(self.labels.len()),
         };
         Ok(base.include(&self.include).exclude(&self.exclude))
@@ -156,12 +195,27 @@ impl ModelBundle {
         self.species_filter_threshold
     }
 
-    /// Raw location-model occurrence scores per class for a week, when the location model is the
-    /// active filter; `None` otherwise.
+    /// Location-model occurrence scores per class for a week, when the location model is the
+    /// active filter; `None` otherwise. For Perch, classes the location model cannot score are
+    /// `NaN`.
     pub fn location_scores_for_week(&self, week: i32) -> Result<Option<Vec<f32>>, ModelError> {
         match (&self.static_list, &self.meta_model, self.location) {
-            (None, Some(meta), Some((lat, lon))) => meta.predict(lat, lon, week).map(Some),
+            (None, Some(meta), Some((lat, lon))) => {
+                let probs = meta.predict(lat, lon, week)?;
+                Ok(Some(match &self.meta_map {
+                    None => probs,
+                    Some(map) => map
+                        .iter()
+                        .map(|m| m.and_then(|j| probs.get(j).copied()).unwrap_or(f32::NAN))
+                        .collect(),
+                }))
+            }
             _ => Ok(None),
         }
     }
+}
+
+/// Perch species are `Genus species`; sound events have no space.
+fn is_species(labels: &Labels, i: usize) -> bool {
+    labels.get(i).is_some_and(|l| l.scientific.contains(' '))
 }
