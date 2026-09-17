@@ -190,6 +190,33 @@ detections are not ground truth: a disagreement can be either model's mistake.
   Yellow-bellied Flycatcher and American Redstart heard as Red-eyed Vireo; American Crow as Common
   Raven; Black-throated Green Warbler as Eastern Wood-Pewee. Listening to those clips is the only
   way to tell which model is right.
+### Live side by side with a BirdNET-Pi station (24 h, Raspberry Pi 4)
+
+Birdsong (BirdNET V2.4, same settings) and Perch v2 (full model, location filter, everything from
+0.3 stored) ran on the same Pi as the station, reading the same microphone through the PulseAudio
+daemon BirdNET-Pi starts. In 23.7 hours: BirdNET-Pi 474 detections, Birdsong 482, Perch 1 720 at
+≥ 0.5.
+
+- **Per-species counts agree; timestamps do not line up.** Red-breasted Nuthatch 251 vs 233, Hairy
+  Woodpecker 84 vs 82, Common Raven 58 vs 59, but matching detections by species within ±4 s pairs
+  only ~72 % (±30 s: 89 %). Time differences are centred on zero (median −0.3 s), so this is
+  window alignment, not a clock offset: BirdNET-Pi cuts windows inside fixed 15 s recordings while
+  Birdsong cuts a continuous stream. Compare counts per species rather than matching timestamps.
+- **The location filters differ in two ways**, both making Birdsong more permissive (109 species
+  allowed vs 86 for the station's week):
+  - Week numbering (decision #7): BirdNET-Pi passes the ISO week (38), Birdsong BirdNET's 48-week
+    number (35).
+  - Model version: the meta model in the Zenodo archives, which Birdsong converts, is BirdNET-Pi's
+    `MData_Model_V2`; BirdNET-Pi defaults to `DATA_MODEL_VERSION=1`, an older model that scores the
+    same species lower (Blue-headed Vireo at week 35: 0.027 in V1, 0.068 in V2, Birdsong 0.071 —
+    the gap to V2 is FP16 vs FP32).
+  - Together these let Birdsong report Blue-headed Vireo (25×, up to 0.94), Barred Owl and Pine
+    Warbler, which BirdNET-Pi hears but discards on the location filter ("Excluded as below
+    Species Occurrence Frequency Threshold"). All three are plausible there in September.
+- **Perch reports far more**: 1 720 detections at ≥ 0.5 against 474, including 465 Black-capped
+  Chickadees where BirdNET found 9–14. Whether those are quiet calls BirdNET misses or false
+  positives is unresolved; it needs listening.
+
 - Thresholds: of the clips BirdNET-Pi reported at ≥ 0.7, Perch `full` gives the same species at
   least 0.3 for 75 % and at least 0.5 for 62 %; the regional slice, whose softmax covers fewer
   classes, 79 % and 69 %. This measures agreement with BirdNET, not precision; choosing a
