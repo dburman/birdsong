@@ -134,6 +134,9 @@ pub struct DetectionConfig {
     pub min_detections: usize,
     /// How long detections of one species count towards `min_detections`.
     pub confirmation_window_seconds: f32,
+    /// Scientific names stored without waiting for confirmation: species that call rarely (owls,
+    /// loons) would otherwise be dropped by `min_detections`.
+    pub confirmation_exempt_species: Vec<String>,
     /// Lower a species' threshold for a while after it has been heard clearly.
     pub dynamic_threshold: bool,
     /// Confidence that counts as "heard clearly".
@@ -158,6 +161,7 @@ impl Default for DetectionConfig {
             privacy_threshold: 0.0,
             min_detections: 1,
             confirmation_window_seconds: 15.0,
+            confirmation_exempt_species: Vec::new(),
             dynamic_threshold: false,
             dynamic_threshold_trigger: 0.9,
             dynamic_threshold_min: 0.2,
@@ -217,6 +221,9 @@ pub struct ModelConfig {
     pub location_filter_unmapped: UnmappedSpecies,
     /// Location/week model ONNX, relative to `dir`. `None` disables the location filter.
     pub meta_model: Option<String>,
+    /// Species of the location model's outputs, relative to `dir`, for location models other than
+    /// BirdNET's own (such as the BirdNET Geomodel). Classes are then matched by scientific name.
+    pub meta_model_labels: Option<String>,
     /// Precomputed allowed-species list; when set, `meta_model` is ignored.
     pub species_list: Option<PathBuf>,
     /// Inference threads; `0` = number of CPUs minus one, minimum one.
@@ -233,6 +240,7 @@ impl Default for ModelConfig {
             common_names: None,
             location_filter_unmapped: UnmappedSpecies::Allow,
             meta_model: Some("meta-model.onnx".into()),
+            meta_model_labels: None,
             species_list: None,
             threads: 0,
         }
@@ -248,6 +256,9 @@ impl ModelConfig {
     }
     pub fn meta_model_path(&self) -> Option<PathBuf> {
         self.meta_model.as_ref().map(|m| self.dir.join(m))
+    }
+    pub fn meta_model_labels_path(&self) -> Option<PathBuf> {
+        self.meta_model_labels.as_ref().map(|m| self.dir.join(m))
     }
     pub fn common_names_path(&self) -> Option<PathBuf> {
         self.common_names.as_ref().map(|m| self.dir.join(m))

@@ -222,6 +222,30 @@ daemon BirdNET-Pi starts. In 23.7 hours: BirdNET-Pi 474 detections, Birdsong 482
   classes, 79 % and 69 %. This measures agreement with BirdNET, not precision; choosing a
   threshold for precision needs labelled recordings.
 
+## BirdNET Geomodel v3.0.4 (optional location model)
+
+| Item | Value |
+|------|-------|
+| Source | BirdNET team, [birdnet-team/geomodel](https://github.com/birdnet-team/geomodel), release `v3.0.4` (2026-08-12) |
+| License | model weights and labels **Apache-2.0** (`LICENSE-MODELS.md`), code MIT; `ACCEPTABLE_USE.md` is guidance and adds no conditions |
+| Input | `[1, 3]` float: latitude, longitude, week (BirdNET's 48-week year, 1–48). There is no year-round mode in the model; Birdsong takes the maximum over the 48 weeks for `-1`, as the project's own `predict.py` does |
+| Output | 14 082 occurrence probabilities (sigmoid inside the graph): 10 410 birds (eBird codes) and 3 672 other taxa (iNaturalist ids: mammals, amphibians, insects) |
+| Labels | `code<TAB>Scientific name<TAB>Common name`, index = line number |
+| Use | `model.meta_model` + `model.meta_model_labels`. Classes are matched to the classifier's by scientific name; with Perch it matches 12 223 of 14 597 species (BirdNET's own location model: 6 262) and gives Perch species their common names (Red Fox instead of *Vulpes vulpes*) |
+| Loading | the batch size is a symbol used inside the graph, so the loader substitutes `batch = 1` throughout, as for the full Perch model |
+
+| File (`scripts/fetch-geomodel.sh`, under `models/geomodel/`) | Size | SHA-256 |
+|------|-----:|---------|
+| `BirdNET+_Geomodel_V3.0.4_Global_14K_FP32.onnx` | 15 503 473 | `0de81d222c23dcb6fa428e958b4dac978783191357e01b7268a103fc6f08e61a` |
+| `BirdNET+_Geomodel_V3.0.4_Global_14K_Labels.txt` | 671 823 | `8250b457e45d43fc3e77b5cbd06a1d311baf585ab9c51ed8d42e011d98534835` |
+
+At a northern-Minnesota station in week 35 (threshold 0.03) it allows Red Fox, Gray Wolf, Spring
+Peeper and Blue-headed Vireo and blocks Koala, Western Roe Deer, a European grasshopper and a
+southern cicada, all of which the full Perch model had reported there with BirdNET's location
+model. Boreal Chorus Frog is blocked in September and allowed year-round: the filter follows the
+season. Hairy Woodpecker (`Dryobates villosus` in Perch) is under another name in the Geomodel and
+follows `model.location_filter_unmapped`.
+
 ## BirdNET V3.0 (evaluated, not adopted yet)
 
 | Item | Value |

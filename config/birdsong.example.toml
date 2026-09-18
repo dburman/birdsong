@@ -34,6 +34,7 @@ privacy_threshold = 0.0         # percent 0..100; higher is stricter
 # Optional detection-quality filters, both off by default (BirdNET-Pi behaviour).
 min_detections = 1              # hits of a species needed before any are stored; 2 with overlap cuts one-off false positives
 confirmation_window_seconds = 15.0
+confirmation_exempt_species = []  # stored without confirmation, e.g. ["Strix varia", "Gavia immer"]
 dynamic_threshold = false       # after a clear detection, lower that species' threshold for a while
 dynamic_threshold_trigger = 0.9 # confidence that counts as clear (must be above min_confidence)
 dynamic_threshold_min = 0.2     # lowest threshold a species can reach
@@ -54,6 +55,10 @@ threads = 0                                  # 0 = CPUs - 1
 # classifier = "perch/perch_v2_no_dft_fp32.onnx"
 # labels = "perch/perch_v2_labels.txt"
 # common_names = "labels/en_us.txt"          # BirdNET labels: common names and the location filter
+# The BirdNET Geomodel (scripts/fetch-geomodel.sh) filters birds and other animals by location and
+# names them; recommended with Perch:
+# meta_model = "geomodel/BirdNET+_Geomodel_V3.0.4_Global_14K_FP32.onnx"
+# meta_model_labels = "geomodel/BirdNET+_Geomodel_V3.0.4_Global_14K_Labels.txt"
 # location_filter_unmapped = "allow"         # Perch species BirdNET does not know: "allow" or "block"
 
 [storage]

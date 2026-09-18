@@ -175,3 +175,115 @@ common_names = "labels/en_us.txt"
         "Poecile atricapillus"
     );
 }
+
+const GEOMODEL: &str = "geomodel/BirdNET+_Geomodel_V3.0.4_Global_14K_FP32.onnx";
+const GEOMODEL_LABELS: &str = "geomodel/BirdNET+_Geomodel_V3.0.4_Global_14K_Labels.txt";
+
+/// The Geomodel scores birds, mammals, amphibians and insects, so it can reject a koala in
+/// Minnesota while keeping a red fox, and gives Perch species common names.
+#[test]
+fn geomodel_filters_other_animals_and_names_them() {
+    let models = repo_root().join("models");
+    if !models.join(ONNX).exists() || !models.join(GEOMODEL).exists() {
+        eprintln!("skipping: Perch or the Geomodel not present (scripts/fetch-geomodel.sh)");
+        return;
+    }
+    let cfg = Config::from_toml(&format!(
+        r#"
+[station]
+latitude = 47.9
+longitude = -91.8
+[[audio.sources]]
+id = "file0"
+kind = "file"
+path = "unused.wav"
+[model]
+dir = {dir:?}
+kind = "perch-v2"
+classifier = "{ONNX}"
+labels = "perch/perch_v2_north-america-east_labels.txt"
+meta_model = "{GEOMODEL}"
+meta_model_labels = "{GEOMODEL_LABELS}"
+[detection]
+confirmation_exempt_species = ["Strix varia"]
+"#,
+        dir = models.display().to_string(),
+    ))
+    .unwrap();
+    let bundle = ModelBundle::load(&cfg).unwrap();
+    let index = |name: &str| bundle.labels.index_of_scientific(name).unwrap();
+    assert_eq!(
+        bundle.labels.get(index("Vulpes vulpes")).unwrap().common,
+        "Red Fox"
+    );
+    assert_eq!(
+        bundle.labels.get(index("Alces alces")).unwrap().common,
+        "Moose"
+    );
+
+    let september = bundle.species_filter_for_week(35).unwrap();
+    assert!(september.is_allowed(index("Vulpes vulpes")));
+    assert!(september.is_allowed(index("Poecile atricapillus")));
+    assert!(
+        september.is_allowed(index("Rain")),
+        "sound events are not filtered"
+    );
+
+    // Year-round is the maximum over the 48 weeks, so it allows at least what any week allows.
+    let year = bundle.species_filter_for_week(-1).unwrap();
+    let scores_year = bundle.location_scores_for_week(-1).unwrap().unwrap();
+    let scores_week = bundle.location_scores_for_week(35).unwrap().unwrap();
+    for i in 0..bundle.labels.len() {
+        if september.is_allowed(i) {
+            assert!(year.is_allowed(i));
+        }
+        if !scores_week[i].is_nan() {
+            assert!(scores_year[i] >= scores_week[i]);
+        }
+    }
+
+    // A misspelt exemption is a configuration error.
+    let bad = Config::from_toml(&toml_with_exemption(&models, "Strix variaa")).unwrap();
+    assert!(ModelBundle::load(&bad).is_err());
+}
+
+fn toml_with_exemption(models: &std::path::Path, name: &str) -> String {
+    format!(
+        r#"
+[[audio.sources]]
+id = "file0"
+kind = "file"
+path = "unused.wav"
+[model]
+dir = {dir:?}
+kind = "perch-v2"
+classifier = "{ONNX}"
+labels = "perch/perch_v2_north-america-east_labels.txt"
+[detection]
+confirmation_exempt_species = ["{name}"]
+"#,
+        dir = models.display().to_string(),
+    )
+}
+
+/// The full Perch label list against the Geomodel: a koala is rejected in Minnesota.
+#[test]
+fn geomodel_rejects_a_koala_in_minnesota() {
+    let models = repo_root().join("models");
+    let perch = models.join("perch/perch_v2_labels.txt");
+    if !perch.exists() || !models.join(GEOMODEL).exists() {
+        eprintln!("skipping: full Perch labels or the Geomodel not present");
+        return;
+    }
+    let labels = birdsong_model::Labels::load_perch(&perch, None).unwrap();
+    let geo = birdsong_model::Labels::load_location(&models.join(GEOMODEL_LABELS)).unwrap();
+    let meta = birdsong_model::MetaModel::load(&models.join(GEOMODEL)).unwrap();
+    let probs = meta.predict(47.9, -91.8, 35).unwrap();
+    assert_eq!(probs.len(), geo.len());
+    let score = |name: &str| probs[geo.index_of_scientific(name).unwrap()];
+    assert!(score("Phascolarctos cinereus") < 0.03, "koala");
+    assert!(score("Capreolus capreolus") < 0.03, "roe deer");
+    assert!(score("Vulpes vulpes") > 0.03, "red fox");
+    let mapped = labels.map_to(&geo).iter().filter(|m| m.is_some()).count();
+    assert!(mapped > 12_000, "Perch species matched by name: {mapped}");
+}

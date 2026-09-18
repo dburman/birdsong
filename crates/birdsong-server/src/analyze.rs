@@ -319,7 +319,8 @@ pub fn analyze_samples(
         let window = TimeDelta::milliseconds(
             (cfg.detection.confirmation_window_seconds * 1000.0).round() as i64,
         );
-        let mut confirmer = Confirmer::new(cfg.detection.min_detections, window);
+        let mut confirmer = Confirmer::new(cfg.detection.min_detections, window)
+            .with_exempt(cfg.detection.confirmation_exempt_species.iter().cloned());
         let mut settled = Vec::with_capacity(released.len());
         for a in released {
             settled.extend(confirmer.push(a));

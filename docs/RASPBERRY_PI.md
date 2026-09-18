@@ -38,7 +38,11 @@ scripts/fetch-perch.sh north-america-east
 On a Pi 4 a regional model analyses a 5 second window in about 1.7 s on one core using 245 MiB;
 `full` (413 MB) takes about 2.7 s and 1.1 GB, so it needs a Pi with 2 GB or more. A regional model
 can miss local species (see `docs/MODEL.md`); with enough memory, `full` with the location filter
-(`model.meta_model` and `model.common_names` set) is the more complete choice. The script prints the `[model]` settings to use. Perch analyses 5 second
+is the more complete choice. For that filter use the BirdNET Geomodel (`scripts/fetch-geomodel.sh`,
+15 MB): unlike BirdNET's location model it also knows mammals, frogs and insects, so it keeps a red
+fox and rejects a koala, and it gives Perch's species common names. Consider
+`detection.min_detections = 2` with `detection.confirmation_exempt_species` for animals that call
+rarely, such as owls and loons. The script prints the `[model]` settings to use. Perch analyses 5 second
 windows, its confidences are lower than BirdNET's (start with `detection.min_confidence = 0.3`),
 and BirdWeather uploads are turned off. Keep `scripts/fetch-models.sh` too: the BirdNET labels and
 location model give Perch English common names and the location filter.

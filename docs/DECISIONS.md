@@ -432,3 +432,26 @@ One entry per non-obvious decision. Newest at the bottom. Format: Decision / Why
   monedula`, but needs a maintained source; revisit if unmatched birds prove a problem); requiring
   a hand-made `model.species_list` (easy to get wrong, and it does not follow the season);
   Perch-specific geographic models (none published).
+
+## 27. 2026-09-18 — BirdNET Geomodel as a location model; confirmation exemptions
+
+- **Decision.**
+  - `model.meta_model_labels` names the species of a location model other than BirdNET's own.
+    When set, classifier classes are matched to it by scientific name (for BirdNET and Perch
+    alike), year-round lists take the maximum over the 48 weeks, and Perch species without a common
+    name take the location model's. The BirdNET Geomodel v3.0.4 (`scripts/fetch-geomodel.sh`) is
+    the intended use. BirdNET's own location model, with no labels file, behaves as before.
+  - `detection.confirmation_exempt_species` lists species stored without waiting for
+    `min_detections`. Names are checked against the classifier's labels when the model loads, so
+    a typo fails at start-up.
+- **Why.** In a 39-hour live run the full Perch model, filtered with BirdNET's location model,
+  reported a koala, a European roe deer and a European grasshopper in Minnesota: BirdNET's model
+  only knows BirdNET's 6 522 classes, so Perch's other species could not be filtered. The Geomodel
+  covers 14 082 species including mammals, amphibians and insects, matches 12 223 of Perch's
+  species by name, and rejects those three while keeping a red fox. Repeat confirmation
+  (`min_detections = 2`) removed the same false positives but also real one-off callers (a red fox,
+  a Common Loon, a Trumpeter Swan); BirdNET-Go users report the same with its Deep Detection and
+  have asked for per-species exemptions.
+- **Rejected.** A built-in exemption list (what calls rarely depends on the region and the
+  station); replacing BirdNET's location model by default (the BirdNET-Pi comparison and parity
+  rely on it; the Geomodel is opt-in); a taxonomy synonym table for the remaining unmatched names.

@@ -565,7 +565,11 @@ async fn storage_task(
         }
         let entry = confirmers
             .entry(analysis.source_id.clone())
-            .or_insert_with(|| (Confirmer::new(detection.min_detections, window), 0));
+            .or_insert_with(|| {
+                let confirmer = Confirmer::new(detection.min_detections, window)
+                    .with_exempt(detection.confirmation_exempt_species.iter().cloned());
+                (confirmer, 0)
+            });
         let released = entry.0.push(analysis);
         let discarded = entry.0.discarded();
         stats.detections_unconfirmed(discarded - entry.1);

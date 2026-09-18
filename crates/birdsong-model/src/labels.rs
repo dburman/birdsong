@@ -199,6 +199,57 @@ impl Labels {
         Self::from_entries(entries)
     }
 
+    /// Load the species list of a location model: either BirdNET's `Scientific_Common` format or
+    /// the Geomodel's tab-separated `code<TAB>Scientific name<TAB>Common name`.
+    pub fn load_location(path: &Path) -> Result<Self, ModelError> {
+        let text = std::fs::read_to_string(path).map_err(|e| ModelError::io(path, e))?;
+        Self::parse_location(&text).map_err(|message| ModelError::Labels {
+            path: path.to_path_buf(),
+            message,
+        })
+    }
+
+    pub fn parse_location(text: &str) -> Result<Self, String> {
+        if !text.lines().any(|l| l.contains('\t')) {
+            return Self::parse(text);
+        }
+        let mut entries = Vec::new();
+        for (i, line) in text.lines().enumerate() {
+            let raw = line.trim_end_matches('\r');
+            let fields: Vec<&str> = raw.split('\t').map(str::trim).collect();
+            let (Some(scientific), common) =
+                (fields.get(1).filter(|s| !s.is_empty()), fields.get(2))
+            else {
+                return Err(format!(
+                    "line {}: expected code, scientific and common name",
+                    i + 1
+                ));
+            };
+            entries.push(Label {
+                raw: raw.to_string(),
+                scientific: (*scientific).to_string(),
+                common: common.unwrap_or(scientific).to_string(),
+                human: false,
+                sound_event: false,
+            });
+        }
+        Self::from_entries(entries)
+    }
+
+    /// Give species that still show their scientific name the common name from `other`.
+    pub fn fill_common_names(&mut self, other: &Labels) {
+        for label in &mut self.entries {
+            if label.common == label.scientific && label.scientific.contains(' ') {
+                if let Some(found) = other
+                    .index_of_scientific(&label.scientific)
+                    .and_then(|j| other.get(j))
+                {
+                    label.common.clone_from(&found.common);
+                }
+            }
+        }
+    }
+
     fn from_entries(entries: Vec<Label>) -> Result<Self, String> {
         if entries.is_empty() {
             return Err("no labels".into());
@@ -350,6 +401,37 @@ mod tests {
             l.iter().filter(|x| x.sound_event).count(),
             198 - PERCH_ANIMAL_EVENTS.len()
         );
+    }
+
+    #[test]
+    fn location_labels_and_common_name_fallback() {
+        let geo = Labels::parse_location(
+            "vulvul\tVulpes vulpes\tRed Fox\n100034\tEpiaeschna heros\tSwamp Darner\n",
+        )
+        .unwrap();
+        assert_eq!(geo.len(), 2);
+        assert_eq!(geo.get(0).unwrap().common, "Red Fox");
+        assert_eq!(geo.index_of_scientific("Epiaeschna heros"), Some(1));
+        assert_eq!(
+            Labels::parse_location("A a_Ay\n")
+                .unwrap()
+                .get(0)
+                .unwrap()
+                .common,
+            "Ay",
+            "BirdNET format still accepted"
+        );
+        assert!(Labels::parse_location("code-only\t\n").is_err());
+
+        let birdnet = Labels::parse("Poecile atricapillus_Black-capped Chickadee\n").unwrap();
+        let mut perch = Labels::parse_perch(
+            "Poecile atricapillus\nVulpes vulpes\nRain\n",
+            Some(&birdnet),
+        )
+        .unwrap();
+        perch.fill_common_names(&geo);
+        let common: Vec<_> = perch.iter().map(|l| l.common.as_str()).collect();
+        assert_eq!(common, ["Black-capped Chickadee", "Red Fox", "Rain"]);
     }
 
     #[test]

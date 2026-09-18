@@ -36,6 +36,8 @@ pub struct ModelBundle {
     /// Perch: location-model index for each class; `None` for BirdNET, whose classes are the
     /// location model's.
     meta_map: Option<Vec<Option<usize>>>,
+    /// The location model has no year-round mode (the Geomodel): use the maximum over 48 weeks.
+    year_round_by_max: bool,
     allow_unmapped: bool,
     static_list: Option<SpeciesFilter>,
     location: Option<(f64, f64)>,
@@ -75,6 +77,19 @@ impl ModelBundle {
                 classifier.num_classes()
             )));
         }
+        let location_labels = cfg
+            .model
+            .meta_model_labels_path()
+            .map(|p| Labels::load_location(&p))
+            .transpose()?;
+        let mut labels = labels;
+        if let (ModelKind::PerchV2, Some(location_labels)) = (cfg.model.kind, &location_labels) {
+            labels.fill_common_names(location_labels);
+        }
+        labels.indices_for(
+            &cfg.detection.confirmation_exempt_species,
+            "detection.confirmation_exempt_species",
+        )?;
         let include =
             labels.indices_for(&cfg.detection.include_species, "detection.include_species")?;
         let exclude =
@@ -90,10 +105,12 @@ impl ModelBundle {
             .then_some((cfg.station.latitude, cfg.station.longitude));
         let birdnet = cfg.model.kind == ModelKind::BirdnetV24;
         let meta_model = match (&static_list, location, cfg.model.meta_model_path()) {
-            (None, Some(_), Some(_)) if !birdnet && birdnet_labels.is_none() => {
+            (None, Some(_), Some(_))
+                if !birdnet && birdnet_labels.is_none() && location_labels.is_none() =>
+            {
                 tracing::warn!(
-                    "the Perch location filter needs model.common_names (BirdNET's labels) to map \
-                     species; no location filter"
+                    "the Perch location filter needs model.meta_model_labels or model.common_names \
+                     to map species; no location filter"
                 );
                 None
             }
@@ -114,10 +131,16 @@ impl ModelBundle {
             }
         };
 
-        // BirdNET's location model scores BirdNET's classes; Perch classes are matched by name.
-        let meta_map = match (&meta_model, &birdnet_labels) {
-            (Some(_), Some(birdnet_labels)) if !birdnet => {
-                let map = labels.map_to(birdnet_labels);
+        // BirdNET's own location model scores BirdNET's classes in order. Any other pairing (a
+        // Geomodel, or Perch with BirdNET's model) is matched by scientific name.
+        let target = location_labels.as_ref().or(if birdnet {
+            None
+        } else {
+            birdnet_labels.as_ref()
+        });
+        let meta_map = match (&meta_model, target) {
+            (Some(_), Some(target)) => {
+                let map = labels.map_to(target);
                 let species = (0..labels.len())
                     .filter(|&i| is_species(&labels, i))
                     .count();
@@ -125,13 +148,24 @@ impl ModelBundle {
                 tracing::info!(
                     species,
                     mapped,
+                    location_model_classes = target.len(),
                     unmapped = cfg.model.location_filter_unmapped.as_str(),
-                    "Perch location filter uses BirdNET's location model"
+                    "location filter matches species by scientific name"
                 );
                 Some(map)
             }
             _ => None,
         };
+        if let Some(meta) = &meta_model {
+            let expected = target.map_or(labels.len(), Labels::len);
+            let got = meta.predict(0.0, 0.0, 1)?.len();
+            if got != expected {
+                return Err(ModelError::Config(format!(
+                    "the location model has {got} outputs but its labels have {expected} entries \
+                     (set model.meta_model_labels for a location model other than BirdNET's)"
+                )));
+            }
+        }
 
         let mut postprocess = PostprocessConfig::from_detection_config(&cfg.detection);
         postprocess.softmax = !birdnet;
@@ -142,6 +176,7 @@ impl ModelBundle {
             postprocess,
             meta_model,
             meta_map,
+            year_round_by_max: location_labels.is_some(),
             allow_unmapped: cfg.model.location_filter_unmapped == UnmappedSpecies::Allow,
             static_list,
             location,
@@ -165,7 +200,7 @@ impl ModelBundle {
                     self.species_filter_threshold,
                 )?,
                 Some(map) => SpeciesFilter::from_mapped_scores(
-                    &meta.predict(lat, lon, week)?,
+                    &self.meta_scores(meta, lat, lon, week)?,
                     map,
                     self.species_filter_threshold,
                     self.allow_unmapped,
@@ -201,7 +236,7 @@ impl ModelBundle {
     pub fn location_scores_for_week(&self, week: i32) -> Result<Option<Vec<f32>>, ModelError> {
         match (&self.static_list, &self.meta_model, self.location) {
             (None, Some(meta), Some((lat, lon))) => {
-                let probs = meta.predict(lat, lon, week)?;
+                let probs = self.meta_scores(meta, lat, lon, week)?;
                 Ok(Some(match &self.meta_map {
                     None => probs,
                     Some(map) => map
@@ -212,6 +247,29 @@ impl ModelBundle {
             }
             _ => Ok(None),
         }
+    }
+}
+
+impl ModelBundle {
+    /// Location-model scores for a week; year-round is the maximum over the 48 weeks for models
+    /// without a year-round mode.
+    fn meta_scores(
+        &self,
+        meta: &MetaModel,
+        lat: f64,
+        lon: f64,
+        week: i32,
+    ) -> Result<Vec<f32>, ModelError> {
+        if !(self.year_round_by_max && week == birdsong_core::YEAR_ROUND_WEEK) {
+            return meta.predict(lat, lon, week);
+        }
+        let mut max = meta.predict(lat, lon, 1)?;
+        for w in 2..=48 {
+            for (m, p) in max.iter_mut().zip(meta.predict(lat, lon, w)?) {
+                *m = m.max(p);
+            }
+        }
+        Ok(max)
     }
 }
 

@@ -8,7 +8,7 @@
 //!   which removes one-off false positives. The hits that led to a confirmation are then stored
 //!   too, so nothing is lost.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
 use chrono::{DateTime, TimeDelta, Utc};
 
@@ -108,6 +108,8 @@ pub struct Confirmer {
     hits: HashMap<String, Vec<DateTime<Utc>>>,
     /// Species already confirmed, with the time their confirmation lapses.
     confirmed_until: HashMap<String, DateTime<Utc>>,
+    /// Species stored immediately, without confirmation.
+    exempt: HashSet<String>,
     discarded: u64,
 }
 
@@ -119,8 +121,15 @@ impl Confirmer {
             held: Vec::new(),
             hits: HashMap::new(),
             confirmed_until: HashMap::new(),
+            exempt: HashSet::new(),
             discarded: 0,
         }
+    }
+
+    /// Species (scientific names) that never wait for confirmation.
+    pub fn with_exempt(mut self, species: impl IntoIterator<Item = String>) -> Self {
+        self.exempt.extend(species);
+        self
     }
 
     /// Detections dropped because their species was never confirmed.
@@ -134,6 +143,9 @@ impl Confirmer {
         let mut undecided = Vec::new();
         for (index, detection) in analysis.detections.iter().enumerate() {
             let species = detection.scientific_name.clone();
+            if self.exempt.contains(&species) {
+                continue; // stored immediately
+            }
             if self
                 .confirmed_until
                 .get(&species)
@@ -357,6 +369,21 @@ mod tests {
         c.push(analysis(t(2), &[("A", 0.9)]));
         let released = c.push(analysis(t(4), &[("A", 0.9)]));
         assert_eq!(names(&released), [vec!["A"], vec!["A"], vec!["A"]]);
+    }
+
+    #[test]
+    fn exempt_species_skip_confirmation() {
+        let mut c =
+            Confirmer::new(2, TimeDelta::seconds(15)).with_exempt(["Strix varia".to_string()]);
+        let released = c.push(analysis(t(0), &[("Strix varia", 0.8), ("A", 0.9)]));
+        assert!(released.is_empty(), "the window waits for A");
+        let released = c.push(analysis(t(20), &[("Strix varia", 0.7)]));
+        assert_eq!(
+            names(&released),
+            [vec!["Strix varia"], vec!["Strix varia"]],
+            "the owl was kept although it called once per window; A was not confirmed"
+        );
+        assert_eq!(c.discarded(), 1);
     }
 
     #[test]
