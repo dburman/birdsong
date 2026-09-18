@@ -15,7 +15,7 @@ ring_buffer_seconds = 90.0      # recent audio kept per source for cutting clips
 [[audio.sources]]
 id = "mic0"
 kind = "alsa"               # "alsa" | "rtsp" | "file"
-device = "hw:1,0"           # find yours with `arecord -l` (ignored for rtsp/file)
+device = "plughw:CARD=Device,DEV=0"  # list yours with `birdsong devices`; card numbers (hw:1,0) can change between boots
 # url = "rtsp://user:pass@camera/stream"   # for kind = "rtsp"
 # path = "/data/test.wav"                  # for kind = "file" (replays the file, for testing)
 gain_db = 0.0

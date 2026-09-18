@@ -1,6 +1,7 @@
 #![forbid(unsafe_code)]
 //! `birdsong` command-line entry point.
 
+use std::io::IsTerminal;
 use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
@@ -29,6 +30,8 @@ struct Cli {
 
 #[derive(Subcommand)]
 enum Command {
+    /// List microphones and other capture devices by their stable ALSA names.
+    Devices,
     /// Load and validate a configuration file, then print the effective configuration.
     CheckConfig {
         /// Path to the TOML configuration file.
@@ -115,13 +118,34 @@ impl ToolArgs {
 }
 
 fn init_logging() {
+    // Colour only on a terminal: systemd journals and log files would otherwise keep the escape
+    // codes. `NO_COLOR` (https://no-color.org) turns it off everywhere.
+    let ansi = std::io::stderr().is_terminal() && std::env::var_os("NO_COLOR").is_none();
     tracing_subscriber::fmt()
         .with_writer(std::io::stderr)
+        .with_ansi(ansi)
         .with_env_filter(
             tracing_subscriber::EnvFilter::try_from_default_env()
                 .unwrap_or_else(|_| tracing_subscriber::EnvFilter::new("info")),
         )
         .init();
+}
+
+/// Warn about ALSA sources named by card number, which can change between boots.
+fn warn_unstable_devices(cfg: &Config) {
+    let devices = birdsong_audio::alsa_names::capture_devices();
+    for src in &cfg.audio.sources {
+        if src.kind != birdsong_core::config::AudioSourceKind::Alsa {
+            continue;
+        }
+        if let Some(device) = &src.device {
+            if let Some(warning) =
+                birdsong_audio::alsa_names::unstable_name_warning(device, &devices)
+            {
+                tracing::warn!(source = %src.id, "{warning}");
+            }
+        }
+    }
 }
 
 #[tokio::main]
@@ -134,8 +158,25 @@ async fn main() -> anyhow::Result<()> {
             println!("ok: HTTP {status} from {url}");
             Ok(())
         }
+        Command::Devices => {
+            let devices = birdsong_audio::alsa_names::capture_devices();
+            if devices.is_empty() {
+                println!("no ALSA capture devices found (Linux only; is a microphone connected?)");
+            }
+            for d in devices {
+                println!(
+                    "{:<34} card {}, device {}: {}",
+                    d.stable_name(),
+                    d.card,
+                    d.device,
+                    d.card_name
+                );
+            }
+            Ok(())
+        }
         Command::CheckConfig { config } => {
             let cfg = Config::load(Some(&config))?;
+            warn_unstable_devices(&cfg);
             print!("{}", cfg.to_toml());
             tracing::info!(path = %config.display(), "configuration is valid");
             Ok(())
@@ -228,6 +269,7 @@ async fn load_bundle(cfg: &Config) -> anyhow::Result<ModelBundle> {
 async fn run(config: PathBuf, opts: PipelineOptions) -> anyhow::Result<()> {
     let cfg =
         Config::load(Some(&config)).with_context(|| format!("loading {}", config.display()))?;
+    warn_unstable_devices(&cfg);
     let bundle = load_bundle(&cfg).await?;
     let store = SqliteStore::open(
         &cfg.storage.database_path(),

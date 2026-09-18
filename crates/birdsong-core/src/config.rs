@@ -94,7 +94,8 @@ pub struct AudioSourceConfig {
     /// Short unique id recorded with every detection (`"mic0"`).
     pub id: String,
     pub kind: AudioSourceKind,
-    /// ALSA device name, e.g. `"hw:1,0"` (kind = alsa).
+    /// ALSA device (kind = alsa). Prefer the stable form `"plughw:CARD=Device,DEV=0"`
+    /// (`birdsong devices` lists them): card numbers such as `"hw:1,0"` can change between boots.
     #[serde(default)]
     pub device: Option<String>,
     /// Stream URL (kind = rtsp).

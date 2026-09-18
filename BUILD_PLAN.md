@@ -275,7 +275,7 @@ timezone = "America/New_York"   # IANA name; used for daily charts and clip fold
 [[audio.sources]]
 id = "mic0"
 kind = "alsa"             # "alsa" | "rtsp" | "file" (file = replay a WAV, for testing)
-device = "hw:1,0"         # ALSA device (ignored for rtsp/file)
+device = "plughw:CARD=Device,DEV=0"  # ALSA device by stable name (ignored for rtsp/file)
 # url = "rtsp://…"        # for kind = "rtsp"
 # path = "/data/test.wav" # for kind = "file"
 gain_db = 0.0

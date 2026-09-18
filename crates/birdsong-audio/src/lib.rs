@@ -10,6 +10,7 @@
 //! Every source produces mono `f32` samples at 48 kHz. Frames carry the UTC time of their first
 //! sample; timestamps advance by sample count so they stay contiguous (see `docs/DECISIONS.md` #10).
 
+pub mod alsa_names;
 mod chunker;
 mod error;
 mod ffmpeg;

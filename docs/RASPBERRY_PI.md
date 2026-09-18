@@ -67,22 +67,22 @@ gunzip -c birdsong-arm64.tar.gz | docker load
 ## 3. Find the microphone
 
 ```bash
-arecord -l
+docker compose run --rm birdsong devices
 ```
 
 ```text
-card 1: Device [USB PnP Sound Device], device 0: USB Audio [USB Audio]
+plughw:CARD=Device,DEV=0           card 3, device 0: USB Audio Device
 ```
 
-That is card 1, device 0. Test a 5 second recording:
+Use the name on the left in the configuration. It stays the same across reboots; the card number
+does not (a USB microphone has been seen to move from card 1 to card 3 after a kernel upgrade), so
+avoid `hw:1,0`-style names. `birdsong check-config` and `birdsong run` warn when a source uses one.
+`plughw` also converts the sample rate and channel count if the microphone cannot record 48 kHz
+mono natively. Without Docker, `arecord -l` shows the same cards. Test a 5 second recording:
 
 ```bash
-arecord -D plughw:1,0 -f S16_LE -r 48000 -c 1 -d 5 test.wav && aplay test.wav
+arecord -D plughw:CARD=Device,DEV=0 -f S16_LE -r 48000 -c 1 -d 5 test.wav && aplay test.wav
 ```
-
-Card numbers can change between boots when several USB audio devices are attached; the name form
-`plughw:CARD=Device,DEV=0` (the name after `card 1:`) is stable. Prefer `plughw` over `hw`: it
-converts sample rate and channel count if the microphone cannot record 48 kHz mono natively.
 
 ## 4. Configure
 

@@ -17,6 +17,16 @@ use tokio_util::sync::CancellationToken;
 use crate::frame::{apply_gain, db_to_gain, samples_to_delta};
 use crate::{AudioError, AudioFrame, AudioSource};
 
+/// ffmpeg messages that are expected and harmless, logged at debug level instead of as warnings.
+const BENIGN_FFMPEG_MESSAGES: &[&str] = &[
+    // ALSA and PulseAudio inputs do not report a layout; ffmpeg assumes stereo and downmixes.
+    "Guessed Channel Layout",
+];
+
+fn is_benign(line: &str) -> bool {
+    BENIGN_FFMPEG_MESSAGES.iter().any(|m| line.contains(m))
+}
+
 /// Lines of ffmpeg stderr kept for error messages.
 const STDERR_TAIL_LINES: usize = 20;
 
@@ -305,7 +315,11 @@ impl FfmpegSource {
                 let mut lines = BufReader::new(stderr).lines();
                 while let Ok(Some(line)) = lines.next_line().await {
                     let line = redact_text(&line);
-                    tracing::warn!(source = %id, "ffmpeg: {line}");
+                    if is_benign(&line) {
+                        tracing::debug!(source = %id, "ffmpeg: {line}");
+                    } else {
+                        tracing::warn!(source = %id, "ffmpeg: {line}");
+                    }
                     let mut t = tail.lock().unwrap_or_else(|p| p.into_inner());
                     if t.len() == STDERR_TAIL_LINES {
                         t.pop_front();
@@ -453,6 +467,14 @@ mod tests {
             path: None,
             gain_db: 0.0,
         }
+    }
+
+    #[test]
+    fn benign_messages_are_recognised() {
+        assert!(is_benign(
+            "[aist#0:0/pcm_s16le @ 0x5590016180] Guessed Channel Layout: stereo"
+        ));
+        assert!(!is_benign("default: Input/output error"));
     }
 
     #[test]
