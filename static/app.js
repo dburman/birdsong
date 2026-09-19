@@ -13,6 +13,8 @@ const state = {
   rows: new Map(), // detection id -> <tr>
   playing: null, // detection id
   refreshTimer: null,
+  latestData: null, // last stats/recent response, for expanding the chart without refetching
+  latestExpanded: false,
 };
 
 const $ = (selector) => document.querySelector(selector);
@@ -135,15 +137,15 @@ async function loadHealth() {
 async function loadLatest() {
   const container = $("#latest-chart");
   try {
-    const data = await api(`stats/recent?window=${encodeURIComponent(state.window)}`);
-    renderLatest(container, data);
+    state.latestData = await api(`stats/recent?window=${encodeURIComponent(state.window)}`);
+    renderLatest(container, state.latestData);
   } catch (e) {
     showMessage(container, `Could not load: ${e.message}`, true);
   }
 }
 
 function renderLatest(container, data) {
-  const species = data.species.slice(0, TOP_BARS);
+  const species = state.latestExpanded ? data.species : data.species.slice(0, TOP_BARS);
   if (species.length === 0) {
     showMessage(container, `No detections in the last ${data.window}.`);
     return;
@@ -160,7 +162,22 @@ function renderLatest(container, data) {
   }
   const extra = data.species.length - species.length;
   container.replaceChildren(grid);
-  if (extra > 0) container.append(el("p", { class: "muted" }, `and ${extra} more species`));
+  const toggle = (expanded) => {
+    state.latestExpanded = expanded;
+    renderLatest(container, data);
+    container.querySelector(".more")?.focus();
+  };
+  if (extra > 0) {
+    container.append(
+      el("button", { type: "button", class: "more", onclick: () => toggle(true) },
+        `Show all ${data.species.length} species`),
+    );
+  } else if (state.latestExpanded && data.species.length > TOP_BARS) {
+    container.append(
+      el("button", { type: "button", class: "more", onclick: () => toggle(false) },
+        `Show only the top ${TOP_BARS}`),
+    );
+  }
 }
 
 // ---------- by hour (stacked columns) ----------

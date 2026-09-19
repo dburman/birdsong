@@ -83,6 +83,8 @@ input[type="date"] {
 .bars .track { height: 18px; background: var(--grid); border-radius: 4px; overflow: hidden; }
 .bars .fill { display: block; height: 100%; background: var(--bar); border-radius: 4px; min-width: 2px; }
 .bars .count { font-variant-numeric: tabular-nums; color: var(--muted); min-width: 2ch; text-align: right; }
+.more { margin: 10px 0 0; padding: 0; border: 0; background: none; color: var(--accent); font: inherit; cursor: pointer; }
+.more:hover { text-decoration: underline; }
 
 /* Stacked columns */
 .daily svg { width: 100%; height: auto; display: block; }
