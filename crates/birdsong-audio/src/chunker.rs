@@ -3,7 +3,7 @@ use std::sync::{Arc, Mutex};
 use birdsong_core::SAMPLE_RATE_HZ;
 use chrono::{DateTime, TimeDelta, Utc};
 
-use crate::frame::AudioFrame;
+use crate::frame::{delta_to_samples, AudioFrame};
 use crate::ring::{lock_ring, RingBuffer, SharedRingBuffer};
 
 /// Frames are fed to the ring buffer in pieces of this size, so chunks are cut before the
@@ -121,20 +121,33 @@ impl Chunker {
             self.started = true;
         } else {
             let expected = ring.end_time();
-            if (frame.captured_at - expected).abs() > self.gap_tolerance {
+            let jump = frame.captured_at - expected;
+            if jump.abs() > self.gap_tolerance {
                 self.gaps += 1;
+                let missing = delta_to_samples(jump);
+                // A forward jump (lost audio, or the source re-anchoring its clock to the wall
+                // clock) is filled with silence so the audio before it stays in the buffer: clips
+                // of detections still being confirmed need it. A backward jump, or one longer
+                // than the buffer, starts the buffer afresh.
+                let keep = missing > 0 && (missing as u64) < ring.capacity() as u64;
+                if keep {
+                    ring.push_silence(missing as u64);
+                } else {
+                    ring.reset(frame.captured_at);
+                }
                 tracing::warn!(
                     source = %self.source_id,
                     %expected,
                     got = %frame.captured_at,
+                    buffered_audio_kept = keep,
                     "audio gap detected; realigning chunks"
                 );
                 events.push(ChunkerEvent::Gap {
                     expected,
                     got: frame.captured_at,
                 });
-                ring.reset(frame.captured_at);
-                self.next_start = 0;
+                // Resume with the new audio; the partial window before the jump is dropped.
+                self.next_start = ring.total_samples();
             }
         }
 
@@ -281,8 +294,9 @@ mod tests {
     }
 
     #[test]
-    fn gap_resets_alignment() {
+    fn forward_gap_realigns_and_keeps_buffered_audio() {
         let mut c = Chunker::new("mic0", CHUNK_SECONDS, 0.0, 90.0);
+        let ring = c.ring();
         let mut fs = frames(4.0, 4_800, t0());
         // Second stretch starts 10 s later than it should.
         fs.extend(frames(6.0, 4_800, t0() + TimeDelta::seconds(14)));
@@ -297,12 +311,72 @@ mod tests {
                 t0() + TimeDelta::seconds(14),
                 t0() + TimeDelta::seconds(17)
             ],
-            "the 1 s left before the gap is dropped; chunks realign to the new stretch"
+            "the 1 s left before the gap is not analysed; chunks realign to the new stretch"
         );
         assert_eq!(
             chunks[1].samples[0], 0.0,
             "new stretch starts at its own sample 0"
         );
+
+        // The audio before the gap is still there, at its own time, for clips.
+        let r = lock_ring(&ring);
+        let before = r.extract(t0() + TimeDelta::seconds(1), 2.0).unwrap();
+        assert_eq!(before.start_at, t0() + TimeDelta::seconds(1));
+        assert_eq!(before.samples[0], 48_000.0);
+        assert_eq!(before.samples[95_999], 143_999.0);
+        // A clip across the gap has the real audio, then silence where audio is missing.
+        let across = r.extract(t0() + TimeDelta::seconds(3), 2.0).unwrap();
+        assert_eq!(across.samples[0], 144_000.0);
+        assert_eq!(across.samples[47_999], 191_999.0);
+        assert!(across.samples[48_000..].iter().all(|&s| s == 0.0));
+        assert_eq!(r.end_time(), t0() + TimeDelta::seconds(20));
+    }
+
+    #[test]
+    fn clock_reanchor_jump_keeps_audio() {
+        // A live source re-anchoring to the wall clock moves its timestamps 2 s ahead with no
+        // audio missing; recent audio must stay extractable.
+        let mut c = Chunker::new("mic0", 5.0, 0.0, 90.0);
+        let ring = c.ring();
+        let mut fs = frames(12.0, 4_800, t0());
+        fs.extend(frames(10.0, 4_800, t0() + TimeDelta::seconds(14)));
+        let (chunks, gaps) = run(&mut c, fs);
+        assert_eq!(gaps, 1);
+        assert_eq!(chunks.len(), 4, "0 s and 5 s before, 14 s and 19 s after");
+        let r = lock_ring(&ring);
+        let clip = r.extract(t0() + TimeDelta::seconds(9), 6.0).unwrap();
+        assert_eq!(clip.samples.len(), 288_000);
+        assert_eq!(clip.samples[0], 432_000.0);
+    }
+
+    #[test]
+    fn backward_or_huge_gaps_reset_the_buffer() {
+        // Timestamps going backwards cannot be filled: start afresh.
+        let mut c = Chunker::new("mic0", CHUNK_SECONDS, 0.0, 90.0);
+        let mut fs = frames(4.0, 4_800, t0());
+        fs.extend(frames(6.0, 4_800, t0() + TimeDelta::seconds(1)));
+        let (chunks, gaps) = run(&mut c, fs);
+        assert_eq!(gaps, 1);
+        let starts: Vec<_> = chunks.iter().map(|ch| ch.start_at).collect();
+        assert_eq!(
+            starts,
+            [
+                t0(),
+                t0() + TimeDelta::seconds(1),
+                t0() + TimeDelta::seconds(4)
+            ]
+        );
+
+        // A gap longer than the whole buffer would push everything out anyway.
+        let mut c = Chunker::new("mic0", CHUNK_SECONDS, 0.0, 90.0);
+        let ring = c.ring();
+        let mut fs = frames(4.0, 4_800, t0());
+        fs.extend(frames(6.0, 4_800, t0() + TimeDelta::seconds(104)));
+        let (chunks, _) = run(&mut c, fs);
+        assert_eq!(chunks[1].start_at, t0() + TimeDelta::seconds(104));
+        assert!(lock_ring(&ring)
+            .extract(t0() + TimeDelta::seconds(1), 2.0)
+            .is_none());
     }
 
     #[test]

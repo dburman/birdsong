@@ -83,6 +83,17 @@ impl RingBuffer {
     }
 
     /// Append samples, overwriting the oldest when full.
+    /// Append `n` samples of silence: fills a forward jump in the audio timeline so the samples
+    /// before it keep their times and stay extractable.
+    pub fn push_silence(&mut self, n: u64) {
+        let cap = self.buf.len() as u64;
+        let fill = n.min(cap);
+        for index in self.total + n - fill..self.total + n {
+            self.buf[(index % cap) as usize] = 0.0;
+        }
+        self.total += n;
+    }
+
     pub fn push(&mut self, samples: &[f32]) {
         let cap = self.buf.len();
         let skip = samples.len().saturating_sub(cap);
@@ -206,5 +217,23 @@ mod tests {
         // A reset forgets old times.
         r.reset(t0() + TimeDelta::seconds(60));
         assert!(r.extract(t0() + TimeDelta::seconds(2), 0.5).is_none());
+    }
+
+    #[test]
+    fn silence_fills_a_jump() {
+        let t0 = chrono::TimeZone::with_ymd_and_hms(&Utc, 2026, 5, 1, 6, 0, 0).unwrap();
+        let mut r = RingBuffer::new(10);
+        r.reset(t0);
+        r.push(&[1.0, 2.0, 3.0]);
+        r.push_silence(4);
+        r.push(&[5.0]);
+        assert_eq!(r.total_samples(), 8);
+        assert_eq!(
+            r.copy_range(0, 8).unwrap(),
+            [1.0, 2.0, 3.0, 0.0, 0.0, 0.0, 0.0, 5.0]
+        );
+        r.push_silence(25); // more than the capacity: only the newest samples are kept
+        assert_eq!(r.total_samples(), 33);
+        assert_eq!(r.copy_range(23, 33).unwrap(), vec![0.0; 10]);
     }
 }

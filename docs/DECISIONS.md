@@ -92,9 +92,10 @@ One entry per non-obvious decision. Newest at the bottom. Format: Decision / Why
 - **Decision.**
   - Frames are timestamped by **sample count** from an anchor, not by read time. Live sources
     anchor to the wall clock when the first frame arrives and re-anchor only when drift exceeds
-    2 s (a stalled stream or restart). The chunker treats a >1 s mismatch as a gap: it resets
-    alignment and the ring buffer and emits `ChunkerEvent::Gap` so the pipeline can flush the
-    privacy `NeighbourMask`.
+    2 s (a stalled stream or restart). The chunker treats a >1 s mismatch as a gap: it realigns
+    chunks and emits `ChunkerEvent::Gap` so the pipeline can flush the privacy `NeighbourMask`.
+    A forward jump is filled with silence so buffered audio survives (decision #28); only a
+    backward jump or one longer than the buffer resets the ring buffer.
   - All configured inputs (alsa, rtsp, file) go through one `FfmpegSource`. A separate pure-Rust
     `WavFileSource` exists for tests and offline analysis so neither needs ffmpeg.
   - The ring buffer is shared between the chunker and the clip writer as `Arc<Mutex<RingBuffer>>`.
@@ -455,3 +456,22 @@ One entry per non-obvious decision. Newest at the bottom. Format: Decision / Why
 - **Rejected.** A built-in exemption list (what calls rarely depends on the region and the
   station); replacing BirdNET's location model by default (the BirdNET-Pi comparison and parity
   rely on it; the Geomodel is opt-in); a taxonomy synonym table for the remaining unmatched names.
+
+## 28. 2026-09-24 — A forward jump in the audio timeline keeps the buffered audio
+
+- **Decision.** When a frame's timestamp is more than 1 s ahead of where the ring buffer ends, the
+  chunker fills the difference with silence instead of emptying the buffer, then realigns its
+  windows to the new audio. Samples before the jump keep their times and stay available for clips.
+  Backward jumps, and jumps longer than the buffer, still reset it. The gap warning now says
+  whether buffered audio was kept.
+- **Why.** On a Raspberry Pi with a USB microphone the capture clock ran about 140 ppm slow, so
+  every ~4 hours its timestamps fell 2 s behind the wall clock and the source re-anchored them
+  (decision #10). The chunker read each re-anchor as a gap and emptied the ring buffer. In 4.8
+  days that happened 29 times; the Perch instance, which holds detections for up to 30 s while
+  confirming them (`min_detections = 2`), lost 5 clips, all within 13 s of a re-anchor. The BirdNET
+  instance, which stores immediately, lost none. The re-anchor warning is logged once per run,
+  which hid how often it happened.
+- **Rejected.** Re-timing the buffered samples to the new clock (their clips would show the wrong
+  audio for their timestamps); keeping the partial window before the jump for analysis (it would
+  contain silence); estimating the capture sample rate to avoid re-anchoring at all (worth doing,
+  but a larger change; the silence fill protects clips either way).
