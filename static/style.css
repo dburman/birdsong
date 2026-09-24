@@ -92,6 +92,13 @@ input[type="date"] {
 .daily .gridline { stroke: var(--grid); }
 .legend { list-style: none; display: flex; flex-wrap: wrap; gap: 6px 14px; padding: 0; margin: 10px 0 0; font-size: 0.85rem; }
 .legend .swatch { display: inline-block; width: 10px; height: 10px; border-radius: 2px; margin-right: 6px; vertical-align: baseline; }
+.multiples { display: grid; grid-template-columns: minmax(90px, max-content) 1fr auto; gap: 6px 10px; align-items: end; margin-top: 10px; font-size: 0.85rem; }
+.multiples .name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; max-width: 220px; }
+.multiples .strip { display: grid; grid-template-columns: repeat(24, 1fr); gap: 2px; height: 22px; align-items: end; border-bottom: 1px solid var(--grid); }
+.multiples .strip span { display: block; background: var(--bar); border-radius: 2px 2px 0 0; }
+.multiples .strip.hours { height: auto; border: 0; color: var(--muted); font-size: 0.75rem; font-variant-numeric: tabular-nums; }
+.multiples .strip.hours span { background: none; white-space: nowrap; }
+.multiples .count { font-variant-numeric: tabular-nums; color: var(--muted); text-align: right; }
 
 /* Tables */
 .table-wrap { overflow-x: auto; }
@@ -136,5 +143,5 @@ dialog audio { width: 100%; }
   .grid { padding: 12px 16px 32px; }
   .thumb { width: 96px; height: 40px; }
   th:nth-child(3), td:nth-child(3) { display: none; }
-  .bars .name { max-width: 130px; }
+  .bars .name, .multiples .name { max-width: 130px; }
 }

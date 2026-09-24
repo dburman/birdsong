@@ -15,6 +15,7 @@ const state = {
   refreshTimer: null,
   latestData: null, // last stats/recent response, for expanding the chart without refetching
   latestExpanded: false,
+  dailyExpanded: false, // the "Other" species of the by-hour chart shown one row each
 };
 
 const $ = (selector) => document.querySelector(selector);
@@ -206,6 +207,7 @@ function niceMax(n) {
 
 function renderDaily(container, legend, data) {
   legend.replaceChildren();
+  $("#daily-more").replaceChildren();
   if (data.species.length === 0) {
     showMessage(container, `No detections on ${data.date}.`);
     return;
@@ -260,6 +262,55 @@ function renderDaily(container, legend, data) {
     const total = s.hours.reduce((a, b) => a + b, 0);
     legend.append(el("li", {}, el("span", { class: "swatch", style: `background:${s.colour}` }), `${s.name} ${total}`));
   }
+  if (rest.length > 0) renderOther($("#daily-more"), rest, () => renderDaily(container, legend, data));
+}
+
+// The species folded into "Other", as small multiples: one row each, one colour, one shared
+// scale, so every species' daily pattern is readable without inventing more series colours.
+function renderOther(target, rest, rerender) {
+  const toggle = el(
+    "button",
+    {
+      type: "button",
+      class: "more",
+      "aria-expanded": String(state.dailyExpanded),
+      onclick: () => {
+        state.dailyExpanded = !state.dailyExpanded;
+        rerender();
+        $("#daily-more .more")?.focus();
+      },
+    },
+    state.dailyExpanded ? "Hide the other species" : `Show the other ${rest.length} species hour by hour`,
+  );
+  target.append(toggle);
+  if (!state.dailyExpanded) return;
+
+  const max = Math.max(1, ...rest.flatMap((s) => s.by_hour));
+  const grid = el("div", { class: "multiples", role: "list", "aria-label": "Other species, detections per hour, same scale" });
+  for (const s of rest) {
+    const busiest = s.by_hour.indexOf(Math.max(...s.by_hour));
+    const hour = (h) => `${String(h).padStart(2, "0")}:00`;
+    const strip = el("span", { class: "strip", "aria-hidden": "true" });
+    s.by_hour.forEach((v, h) => {
+      const bar = el("span", { style: v ? `height:max(2px, ${(100 * v) / max}%)` : "height:0" });
+      bar.title = `${hour(h)} ${s.common_name}: ${v}`;
+      strip.append(bar);
+    });
+    grid.append(
+      el("span", {
+        class: "name",
+        title: s.scientific_name,
+        role: "listitem",
+        "aria-label": `${s.common_name}: ${s.total} detection${s.total === 1 ? "" : "s"}, most at ${hour(busiest)}`,
+      }, s.common_name),
+      strip,
+      el("span", { class: "count", "aria-hidden": "true" }, fmt.number(s.total)),
+    );
+  }
+  const axis = el("span", { class: "strip hours", "aria-hidden": "true" });
+  for (let h = 0; h < 24; h++) axis.append(el("span", {}, h % 6 === 0 ? String(h).padStart(2, "0") : ""));
+  grid.append(el("span", {}), axis, el("span", {}));
+  target.append(grid);
 }
 
 // ---------- playback ----------

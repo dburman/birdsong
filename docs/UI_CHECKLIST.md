@@ -15,6 +15,8 @@ several species, then open `http://127.0.0.1:8080/`.
 - [ ] Bars are sorted by count, longest first; counts sit at the end of each bar.
 - [ ] The 1h / 6h / 24h / 7d / 30d buttons switch data and only one is highlighted.
 - [ ] A window with no detections says so instead of drawing an empty chart.
+- [ ] With more than 12 species, "Show all N species" lists every one and "Show only the top 12"
+      collapses the list; the choice survives the chart refreshing.
 
 ## By hour
 
@@ -22,6 +24,10 @@ several species, then open `http://127.0.0.1:8080/`.
 - [ ] Hovering a segment shows the hour, species and count.
 - [ ] The legend lists the same species and colours; more than 7 species adds an "Other" entry.
 - [ ] Picking another date loads it; future dates cannot be picked.
+- [ ] With an "Other" entry, "Show the other N species hour by hour" adds one row per species
+      with its own 24-hour strip, all on one scale and in one colour; the stacked chart and its
+      colours do not change. Hovering a strip column shows the hour and count; the rows stay
+      open when the chart refreshes; at phone width nothing scrolls sideways.
 
 ## Recent detections
 
