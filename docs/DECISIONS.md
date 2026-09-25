@@ -475,3 +475,32 @@ One entry per non-obvious decision. Newest at the bottom. Format: Decision / Why
   audio for their timestamps); keeping the partial window before the jump for analysis (it would
   contain silence); estimating the capture sample rate to avoid re-anchoring at all (worth doing,
   but a larger change; the silence fill protects clips either way).
+
+## 29. 2026-09-24 — Follow the capture clock gradually; count clock corrections
+
+- **Decision.**
+  - A live source keeps its timeline at exactly 48 000 samples per second and follows the wall
+    clock by repeating or skipping single samples, spread evenly through a frame and at most 1 in
+    1 000. The offset between sample count and wall clock is smoothed over about 60 s, which
+    averages out read-time jitter; the correction removes it over a similar time. Re-anchoring
+    (decision #10) remains for deviations beyond 2 s: stalls and restarts.
+  - Every re-anchor is logged with the size of the jump, not only the first per run. `/health` and
+    `/metrics` report re-anchors, samples inserted and dropped, and the net correction in ppm.
+    `gaps` still counts every timeline discontinuity, re-anchors included.
+  - The by-hour chart gives each species a remembered colour slot (stored in the browser) rather
+    than its rank of the day; the busier species wins when two of a day's species remember the
+    same slot.
+- **Why.** A Raspberry Pi's USB microphone ran 140 ppm slow, so every ~4 hours the timestamps fell
+  2 s behind and jumped, skipping the analysis window around the jump and, before decision #28,
+  losing clips. The warning was logged once per run and the jumps were counted as ordinary gaps,
+  so it took a five-day soak to notice. In a four-hour simulation at 140 ppm with 0–80 ms arrival
+  jitter, the correction keeps the timeline within 26 ms of the wall clock with no re-anchors, from
+  500 ppm slow to 400 ppm fast. Everything downstream (ring buffer, chunker, clip timing) assumes
+  exactly 48 kHz, so stamping frames at a measured rate would only move the jump into the chunker.
+  One repeated sample in ~7 000 is inaudible and does not affect classification. Colouring by rank
+  repainted species whenever the day changed, which the chart guidance rules out: colour follows
+  the entity.
+- **Rejected.** Resampling with interpolation (same result for classification at far more cost);
+  stamping frames at an estimated sample rate (see above); a smaller re-anchor tolerance (more
+  frequent, smaller jumps, each still realigning the windows); hashing species names to colours
+  (two of a day's species could share a colour).

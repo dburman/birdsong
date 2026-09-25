@@ -24,7 +24,7 @@ mod wav_source;
 
 pub use chunker::{Chunk, Chunker, ChunkerEvent};
 pub use error::AudioError;
-pub use ffmpeg::{ffmpeg_args, redact_text, redact_url, FfmpegOptions, FfmpegSource};
+pub use ffmpeg::{ffmpeg_args, redact_text, redact_url, ClockStats, FfmpegOptions, FfmpegSource};
 pub use frame::{apply_gain, db_to_gain, delta_to_samples, samples_to_delta, AudioFrame};
 pub use ring::{lock_ring, Extracted, RingBuffer, SharedRingBuffer};
 pub use source::{source_from_config, AudioSource};

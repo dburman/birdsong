@@ -99,6 +99,44 @@ function colour(index) {
   return `var(--c${(index % 8) + 1})`;
 }
 
+// Colours follow the species, not its rank: a species keeps the slot it was first given (1-7;
+// 8 is "Other") across dates, refreshes and reloads, so switching days does not repaint it.
+// When two of a day's species remember the same slot, the busier one keeps it.
+const COLOUR_SLOTS = 7;
+const colourSlots = (() => {
+  try {
+    return new Map(JSON.parse(localStorage.getItem("birdsong.colourSlots") || "[]"));
+  } catch {
+    return new Map();
+  }
+})();
+
+function speciesColours(species) {
+  const assigned = new Map();
+  const used = new Set();
+  for (const s of species) {
+    const slot = colourSlots.get(s.scientific_name);
+    if (slot !== undefined && !used.has(slot)) {
+      assigned.set(s.scientific_name, slot);
+      used.add(slot);
+    }
+  }
+  for (const s of species) {
+    if (assigned.has(s.scientific_name)) continue;
+    let slot = 0;
+    while (used.has(slot)) slot++;
+    assigned.set(s.scientific_name, slot);
+    used.add(slot);
+    if (!colourSlots.has(s.scientific_name)) colourSlots.set(s.scientific_name, slot);
+  }
+  try {
+    localStorage.setItem("birdsong.colourSlots", JSON.stringify([...colourSlots]));
+  } catch {
+    // Private browsing or storage disabled: colours are still stable for this visit.
+  }
+  return (name) => colour(assigned.get(name));
+}
+
 // ---------- status ----------
 
 async function loadHealth() {
@@ -214,7 +252,8 @@ function renderDaily(container, legend, data) {
   }
   const shown = data.species.slice(0, LEGEND_SPECIES);
   const rest = data.species.slice(LEGEND_SPECIES);
-  const series = shown.map((s, i) => ({ name: s.common_name, hours: s.by_hour, colour: colour(i) }));
+  const colourOf = speciesColours(shown);
+  const series = shown.map((s) => ({ name: s.common_name, hours: s.by_hour, colour: colourOf(s.scientific_name) }));
   if (rest.length > 0) {
     const hours = Array.from({ length: 24 }, (_, h) => rest.reduce((sum, s) => sum + s.by_hour[h], 0));
     series.push({ name: `Other (${rest.length})`, hours, colour: "var(--c8)" });

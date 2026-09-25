@@ -1,6 +1,9 @@
 //! Lock-free counters shared by the pipeline and (later) the HTTP API.
 
 use std::sync::atomic::{AtomicI64, AtomicU64, Ordering};
+use std::sync::Arc;
+
+use birdsong_audio::ClockStats;
 use std::time::Duration;
 
 use chrono::{DateTime, Utc};
@@ -32,6 +35,8 @@ pub struct PipelineStats {
     last_chunk_at_micros: AtomicI64,
     /// Wall-clock time the newest chunk finished inference, microseconds since the epoch; 0 = none.
     last_processed_at_micros: AtomicI64,
+    /// Capture clock corrections, updated by the live audio sources.
+    clock: Arc<ClockStats>,
 }
 
 /// A consistent-enough copy of the counters, for logs and the API.
@@ -40,7 +45,16 @@ pub struct StatsSnapshot {
     pub chunks_processed: u64,
     pub chunks_dropped: u64,
     pub masked_chunks: u64,
+    /// Discontinuities in the audio timeline, whatever the cause (includes `clock_reanchors`).
     pub gaps: u64,
+    /// Times a live source's timestamps jumped to the wall clock (a stall, a restart, or drift the
+    /// gradual correction could not absorb).
+    pub clock_reanchors: u64,
+    /// Samples repeated / skipped to keep a live capture clock in step with the wall clock.
+    pub clock_samples_inserted: u64,
+    pub clock_samples_dropped: u64,
+    /// Net capture clock correction in parts per million (positive: the microphone runs slow).
+    pub clock_correction_ppm: Option<f64>,
     pub detections: u64,
     /// Detections dropped because their species was never confirmed (`min_detections`).
     pub unconfirmed_detections: u64,
@@ -62,6 +76,11 @@ pub struct StatsSnapshot {
 impl PipelineStats {
     pub fn new() -> Self {
         Self::default()
+    }
+
+    /// The counters live audio sources update with their clock corrections.
+    pub fn clock(&self) -> Arc<ClockStats> {
+        Arc::clone(&self.clock)
     }
 
     pub(crate) fn chunk_processed(&self, start_at: DateTime<Utc>, inference: Duration) {
@@ -141,6 +160,10 @@ impl PipelineStats {
             chunks_dropped: self.chunks_dropped.load(Ordering::Relaxed),
             masked_chunks: self.masked_chunks.load(Ordering::Relaxed),
             gaps: self.gaps.load(Ordering::Relaxed),
+            clock_reanchors: self.clock.reanchors(),
+            clock_samples_inserted: self.clock.samples_inserted(),
+            clock_samples_dropped: self.clock.samples_dropped(),
+            clock_correction_ppm: self.clock.correction_ppm(),
             detections: self.detections.load(Ordering::Relaxed),
             unconfirmed_detections: self.unconfirmed_detections.load(Ordering::Relaxed),
             inference_errors: self.inference_errors.load(Ordering::Relaxed),

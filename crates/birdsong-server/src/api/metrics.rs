@@ -76,6 +76,36 @@ pub async fn metrics(State(state): State<AppState>) -> ApiResult<Response> {
     );
     metric(
         &mut out,
+        "birdsong_clock_reanchors_total",
+        "counter",
+        "Times capture timestamps jumped to the wall clock (stalls, restarts, excess drift).",
+        s.clock_reanchors,
+    );
+    metric(
+        &mut out,
+        "birdsong_clock_samples_inserted_total",
+        "counter",
+        "Samples repeated to keep a slow capture clock in step with the wall clock.",
+        s.clock_samples_inserted,
+    );
+    metric(
+        &mut out,
+        "birdsong_clock_samples_dropped_total",
+        "counter",
+        "Samples skipped to keep a fast capture clock in step with the wall clock.",
+        s.clock_samples_dropped,
+    );
+    if let Some(ppm) = s.clock_correction_ppm {
+        metric(
+            &mut out,
+            "birdsong_clock_correction_ppm",
+            "gauge",
+            "Net capture clock correction in parts per million (positive: the microphone runs slow).",
+            ppm,
+        );
+    }
+    metric(
+        &mut out,
         "birdsong_detections_total",
         "counter",
         "Detections stored since the process started.",

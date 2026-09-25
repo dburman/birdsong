@@ -21,6 +21,8 @@ several species, then open `http://127.0.0.1:8080/`.
 ## By hour
 
 - [ ] Columns line up with the hour labels 00, 03, … 21, in the station time zone.
+- [ ] A species keeps its colour when switching dates and after reloading the page; no two species
+      share a colour on the same day.
 - [ ] Hovering a segment shows the hour, species and count.
 - [ ] The legend lists the same species and colours; more than 7 species adds an "Other" entry.
 - [ ] Picking another date loads it; future dates cannot be picked.

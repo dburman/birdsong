@@ -3,6 +3,7 @@
 use std::collections::VecDeque;
 use std::path::PathBuf;
 use std::process::Stdio;
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
@@ -14,7 +15,7 @@ use tokio::process::Command;
 use tokio::sync::mpsc;
 use tokio_util::sync::CancellationToken;
 
-use crate::frame::{apply_gain, db_to_gain, samples_to_delta};
+use crate::frame::{apply_gain, db_to_gain, delta_to_samples, samples_to_delta};
 use crate::{AudioError, AudioFrame, AudioSource};
 
 /// ffmpeg messages that are expected and harmless, logged at debug level instead of as warnings.
@@ -29,6 +30,56 @@ fn is_benign(line: &str) -> bool {
 
 /// Lines of ffmpeg stderr kept for error messages.
 const STDERR_TAIL_LINES: usize = 20;
+
+/// Clock corrections made by live sources, shared with the pipeline's statistics.
+#[derive(Debug, Default)]
+pub struct ClockStats {
+    reanchors: AtomicU64,
+    samples_inserted: AtomicU64,
+    samples_dropped: AtomicU64,
+    samples_out: AtomicU64,
+}
+
+impl ClockStats {
+    /// Times the timestamps jumped to the wall clock (drift beyond the tolerance, a stall).
+    pub fn reanchors(&self) -> u64 {
+        self.reanchors.load(Ordering::Relaxed)
+    }
+
+    /// Samples repeated to keep up with the wall clock (the capture clock runs slow).
+    pub fn samples_inserted(&self) -> u64 {
+        self.samples_inserted.load(Ordering::Relaxed)
+    }
+
+    /// Samples skipped to keep up with the wall clock (the capture clock runs fast).
+    pub fn samples_dropped(&self) -> u64 {
+        self.samples_dropped.load(Ordering::Relaxed)
+    }
+
+    /// Net correction so far in parts per million: positive when the capture clock runs slow
+    /// and samples are added. `None` before any audio.
+    pub fn correction_ppm(&self) -> Option<f64> {
+        let out = self.samples_out.load(Ordering::Relaxed);
+        (out > 0).then(|| {
+            (self.samples_inserted() as f64 - self.samples_dropped() as f64) / out as f64 * 1e6
+        })
+    }
+
+    fn record(&self, samples_out: usize, adjusted: i64, reanchored: bool) {
+        self.samples_out
+            .fetch_add(samples_out as u64, Ordering::Relaxed);
+        if adjusted > 0 {
+            self.samples_inserted
+                .fetch_add(adjusted as u64, Ordering::Relaxed);
+        } else if adjusted < 0 {
+            self.samples_dropped
+                .fetch_add(adjusted.unsigned_abs(), Ordering::Relaxed);
+        }
+        if reanchored {
+            self.reanchors.fetch_add(1, Ordering::Relaxed);
+        }
+    }
+}
 
 /// Tuning for [`FfmpegSource`]. `Default` is right for production.
 #[derive(Clone, Debug)]
@@ -46,7 +97,10 @@ pub struct FfmpegOptions {
     /// Samples per emitted frame (4 800 = 100 ms).
     pub frame_samples: usize,
     /// Live sources: re-anchor timestamps to the wall clock when they drift further than this.
+    /// Normal clock drift is corrected gradually well before (see [`FrameClock`]).
     pub drift_tolerance: TimeDelta,
+    /// Where live sources report their clock corrections.
+    pub clock_stats: Option<Arc<ClockStats>>,
 }
 
 impl Default for FfmpegOptions {
@@ -60,6 +114,7 @@ impl Default for FfmpegOptions {
             healthy_run: Duration::from_secs(60),
             frame_samples: 4_800,
             drift_tolerance: TimeDelta::seconds(2),
+            clock_stats: None,
         }
     }
 }
@@ -152,24 +207,42 @@ pub fn redact_text(text: &str) -> String {
         .join(" ")
 }
 
+/// How quickly measured clock drift is followed: the offset between the sample count and the wall
+/// clock is smoothed over about this long, which averages out pipe and scheduling jitter.
+const DRIFT_SMOOTHING_SECONDS: f64 = 60.0;
+/// Fastest gradual correction: 1 sample in 1 000 (a capture clock 0.1 % off still keeps up).
+const MAX_CORRECTION_PPM: f64 = 1_000.0;
+/// Frames shorter than this are not corrected (their share of the correction is carried over).
+const MIN_CORRECTED_FRAME: usize = 480;
+
 /// Assigns capture times to frames by sample count.
+///
+/// Live sources: the timeline stays at exactly 48 000 samples per second, which the ring buffer,
+/// chunker and clip writer rely on. A capture clock that runs slightly slow or fast (a USB
+/// microphone measured 140 ppm slow) is followed by repeating or skipping single samples, spread
+/// evenly and at most 1 in 1 000, so timestamps track the wall clock without jumping. Only a
+/// larger deviation (a stall, a restart) re-anchors the timestamps.
 #[derive(Debug)]
 struct FrameClock {
     fixed_start: Option<DateTime<Utc>>,
     anchor: Option<DateTime<Utc>>,
     samples: u64,
     drift_tolerance: TimeDelta,
-    reanchors: u64,
+    /// Smoothed wall clock minus timeline, in samples (positive: the timeline is behind).
+    offset: f64,
+    /// Correction owed but not yet applied, in samples.
+    debt: f64,
+    /// Set by the latest `stamp`: how far the timestamps jumped, if they were re-anchored.
+    last_reanchor: Option<TimeDelta>,
+    /// Set by the latest `stamp`: samples repeated (positive) or skipped (negative).
+    last_adjust: i64,
 }
 
 impl FrameClock {
     fn fixed(start: DateTime<Utc>) -> Self {
         Self {
             fixed_start: Some(start),
-            anchor: None,
-            samples: 0,
-            drift_tolerance: TimeDelta::zero(),
-            reanchors: 0,
+            ..Self::wall(TimeDelta::zero())
         }
     }
 
@@ -179,30 +252,76 @@ impl FrameClock {
             anchor: None,
             samples: 0,
             drift_tolerance,
-            reanchors: 0,
+            offset: 0.0,
+            debt: 0.0,
+            last_reanchor: None,
+            last_adjust: 0,
         }
     }
 
-    /// Timestamp for the next `n` samples, which finished arriving at `now`.
-    fn stamp(&mut self, n: usize, now: DateTime<Utc>) -> DateTime<Utc> {
+    /// Timestamp for `samples`, which finished arriving at `now`. For live sources the frame may
+    /// gain or lose a sample or two to follow the wall clock.
+    fn stamp(&mut self, samples: &mut Vec<f32>, now: DateTime<Utc>) -> DateTime<Utc> {
+        self.last_reanchor = None;
+        self.last_adjust = 0;
         let at = match self.fixed_start {
             Some(start) => start + samples_to_delta(self.samples),
             None => {
-                let end_offset = samples_to_delta(self.samples + n as u64);
-                let anchor = match self.anchor {
-                    Some(a) if (now - (a + end_offset)).abs() <= self.drift_tolerance => a,
-                    Some(_) => {
-                        self.reanchors += 1;
-                        now - end_offset
+                let end_offset = samples_to_delta(self.samples + samples.len() as u64);
+                match self.anchor {
+                    Some(a) if (now - (a + end_offset)).abs() <= self.drift_tolerance => {
+                        let behind = delta_to_samples(now - (a + end_offset)) as f64;
+                        self.follow(samples, behind);
                     }
-                    None => now - end_offset,
-                };
-                self.anchor = Some(anchor);
-                anchor + samples_to_delta(self.samples)
+                    Some(a) => {
+                        self.last_reanchor = Some(now - (a + end_offset));
+                        self.anchor = Some(now - end_offset);
+                        self.offset = 0.0;
+                        self.debt = 0.0;
+                    }
+                    None => self.anchor = Some(now - end_offset),
+                }
+                self.anchor.unwrap_or(now) + samples_to_delta(self.samples)
             }
         };
-        self.samples += n as u64;
+        self.samples += samples.len() as u64;
         at
+    }
+
+    /// Smooth the measured offset and repeat or skip samples to work it off gradually.
+    fn follow(&mut self, samples: &mut Vec<f32>, behind: f64) {
+        let n = samples.len();
+        let alpha = (n as f64 / f64::from(SAMPLE_RATE_HZ) / DRIFT_SMOOTHING_SECONDS).min(1.0);
+        self.offset += alpha * (behind - self.offset);
+        self.debt += alpha * self.offset;
+        if n < MIN_CORRECTED_FRAME {
+            return;
+        }
+        let limit = (n as f64 * MAX_CORRECTION_PPM / 1e6).max(1.0);
+        let k = self.debt.trunc().clamp(-limit, limit);
+        self.debt = (self.debt - k).clamp(-limit, limit);
+        let k = k as i64;
+        adjust_evenly(samples, k);
+        self.last_adjust = k;
+    }
+}
+
+/// Repeat (`k > 0`) or skip (`k < 0`) `|k|` samples, spread evenly through the frame.
+fn adjust_evenly(samples: &mut Vec<f32>, k: i64) {
+    let n = samples.len();
+    let count = k.unsigned_abs() as usize;
+    if count == 0 || count >= n {
+        return;
+    }
+    let positions = (1..=count).map(|j| j * n / (count + 1));
+    if k > 0 {
+        for p in positions.rev() {
+            samples.insert(p, samples[p]);
+        }
+    } else {
+        for p in positions.rev() {
+            samples.remove(p);
+        }
     }
 }
 
@@ -269,10 +388,20 @@ impl FfmpegSource {
         let (whole, _) = bytes.as_chunks::<4>();
         let mut samples: Vec<f32> = whole.iter().map(|b| f32::from_le_bytes(*b)).collect();
         apply_gain(&mut samples, self.gain);
-        let captured_at = clock.stamp(samples.len(), Utc::now());
-        if clock.reanchors == 1 && clock.anchor.is_some() {
-            tracing::warn!(source = %self.src.id, "capture clock drifted; timestamps re-anchored to wall clock");
-            clock.reanchors += 1; // warn once per run
+        let captured_at = clock.stamp(&mut samples, Utc::now());
+        if let Some(jump) = clock.last_reanchor {
+            tracing::warn!(
+                source = %self.src.id,
+                jump_ms = jump.num_milliseconds(),
+                "capture clock re-anchored to the wall clock"
+            );
+        }
+        if let Some(stats) = &self.opts.clock_stats {
+            stats.record(
+                samples.len(),
+                clock.last_adjust,
+                clock.last_reanchor.is_some(),
+            );
         }
         let frame = AudioFrame {
             samples,
@@ -533,12 +662,19 @@ mod tests {
         );
     }
 
+    fn frame(n: usize) -> Vec<f32> {
+        (0..n).map(|i| i as f32).collect()
+    }
+
     #[test]
     fn fixed_clock_counts_samples() {
         let t0 = Utc.with_ymd_and_hms(2026, 5, 1, 6, 0, 0).unwrap();
         let mut c = FrameClock::fixed(t0);
-        assert_eq!(c.stamp(4_800, t0 + TimeDelta::days(9)), t0);
-        assert_eq!(c.stamp(4_800, t0), t0 + TimeDelta::milliseconds(100));
+        assert_eq!(c.stamp(&mut frame(4_800), t0 + TimeDelta::days(9)), t0);
+        assert_eq!(
+            c.stamp(&mut frame(4_800), t0),
+            t0 + TimeDelta::milliseconds(100)
+        );
     }
 
     #[test]
@@ -547,17 +683,103 @@ mod tests {
         let tol = TimeDelta::seconds(2);
         let mut c = FrameClock::wall(tol);
         // First frame (100 ms) finished arriving at t0 → it started at t0 − 100 ms.
-        assert_eq!(c.stamp(4_800, t0), t0 - TimeDelta::milliseconds(100));
-        // Steady arrival with jitter stays contiguous.
-        assert_eq!(c.stamp(4_800, t0 + TimeDelta::milliseconds(250)), t0);
         assert_eq!(
-            c.stamp(4_800, t0 + TimeDelta::milliseconds(150)),
+            c.stamp(&mut frame(4_800), t0),
+            t0 - TimeDelta::milliseconds(100)
+        );
+        // Steady arrival with jitter stays contiguous.
+        assert_eq!(
+            c.stamp(&mut frame(4_800), t0 + TimeDelta::milliseconds(250)),
+            t0
+        );
+        assert_eq!(
+            c.stamp(&mut frame(4_800), t0 + TimeDelta::milliseconds(150)),
             t0 + TimeDelta::milliseconds(100)
         );
-        assert_eq!(c.reanchors, 0);
+        assert_eq!(c.last_reanchor, None);
         // Arrival 5 s late (e.g. stalled stream) → re-anchor to the wall clock.
         let late = t0 + TimeDelta::seconds(5) + TimeDelta::milliseconds(300);
-        assert_eq!(c.stamp(4_800, late), late - TimeDelta::milliseconds(100));
-        assert_eq!(c.reanchors, 1);
+        assert_eq!(
+            c.stamp(&mut frame(4_800), late),
+            late - TimeDelta::milliseconds(100)
+        );
+        assert!(c.last_reanchor.is_some_and(|j| j > TimeDelta::seconds(4)));
+    }
+
+    #[test]
+    fn samples_are_repeated_or_skipped_evenly() {
+        let mut up = frame(10);
+        adjust_evenly(&mut up, 1);
+        assert_eq!(up, [0.0, 1.0, 2.0, 3.0, 4.0, 5.0, 5.0, 6.0, 7.0, 8.0, 9.0]);
+        let mut down = frame(10);
+        adjust_evenly(&mut down, -2);
+        assert_eq!(down, [0.0, 1.0, 2.0, 4.0, 5.0, 7.0, 8.0, 9.0]);
+        let mut same = frame(3);
+        adjust_evenly(&mut same, 5);
+        assert_eq!(same.len(), 3, "never more than the frame holds");
+    }
+
+    /// Simulate a capture clock `ppm` off from the wall clock, with arrival jitter, for
+    /// `minutes`; returns (re-anchors, net samples adjusted, final |offset| in ms).
+    fn simulate(ppm: f64, minutes: u64) -> (u64, i64, f64) {
+        let t0 = Utc.with_ymd_and_hms(2026, 5, 1, 6, 0, 0).unwrap();
+        let mut c = FrameClock::wall(TimeDelta::milliseconds(300));
+        // 4 800 captured samples take this long in wall time.
+        let frame_wall = 0.1 / (1.0 + ppm / 1e6);
+        let (mut reanchors, mut adjusted, mut rng) = (0, 0i64, 12_345u64);
+        let frames = minutes * 600;
+        let mut wall = 0.0;
+        for _ in 0..frames {
+            wall += frame_wall;
+            rng = rng.wrapping_mul(6_364_136_223_846_793_005).wrapping_add(1);
+            let jitter = ((rng >> 33) % 80) as f64 / 1000.0; // arrives 0-80 ms late
+            let now = t0 + TimeDelta::microseconds(((wall + jitter) * 1e6) as i64);
+            c.stamp(&mut vec![0.0; 4_800], now);
+            reanchors += u64::from(c.last_reanchor.is_some());
+            adjusted += c.last_adjust;
+        }
+        let timeline = c.samples as f64 / 48_000.0;
+        let offset_ms = (wall - timeline).abs() * 1000.0;
+        (reanchors, adjusted, offset_ms)
+    }
+
+    #[test]
+    fn a_slow_capture_clock_is_followed_without_jumps() {
+        // Uncorrected, 500 ppm slow drifts past the 300 ms tolerance after 10 minutes.
+        let (reanchors, adjusted, offset_ms) = simulate(-500.0, 20);
+        assert_eq!(reanchors, 0, "drift must be absorbed, not re-anchored");
+        assert!(adjusted > 0, "samples repeated: {adjusted}");
+        // 20 min at 500 ppm is 28 800 samples; the correction covers it within the jitter.
+        assert!((adjusted - 28_800).abs() < 2_500, "{adjusted}");
+        assert!(
+            offset_ms < 120.0,
+            "timeline within {offset_ms:.0} ms of the wall clock"
+        );
+    }
+
+    #[test]
+    fn a_fast_capture_clock_is_followed_without_jumps() {
+        let (reanchors, adjusted, offset_ms) = simulate(400.0, 20);
+        assert_eq!(reanchors, 0);
+        assert!(adjusted < 0, "samples skipped: {adjusted}");
+        assert!(offset_ms < 120.0, "{offset_ms:.0} ms");
+    }
+
+    #[test]
+    fn a_stall_still_reanchors() {
+        let t0 = Utc.with_ymd_and_hms(2026, 5, 1, 6, 0, 0).unwrap();
+        let mut c = FrameClock::wall(TimeDelta::seconds(2));
+        let stats = ClockStats::default();
+        for i in 0..100 {
+            let now = t0 + TimeDelta::milliseconds(100 * i);
+            let mut f = vec![0.0; 4_800];
+            c.stamp(&mut f, now);
+            stats.record(f.len(), c.last_adjust, c.last_reanchor.is_some());
+        }
+        let mut f = vec![0.0; 4_800];
+        c.stamp(&mut f, t0 + TimeDelta::seconds(30));
+        stats.record(f.len(), c.last_adjust, c.last_reanchor.is_some());
+        assert_eq!(stats.reanchors(), 1);
+        assert!(stats.correction_ppm().is_some());
     }
 }

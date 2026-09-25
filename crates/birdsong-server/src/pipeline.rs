@@ -87,10 +87,12 @@ impl Pipeline {
         store: Arc<dyn DetectionStore>,
         opts: PipelineOptions,
     ) -> anyhow::Result<Self> {
+        let stats = Arc::new(PipelineStats::new());
         let ffmpeg = FfmpegOptions {
             ffmpeg_path: cfg.audio.ffmpeg_path.clone(),
             realtime_files: !opts.fast_files,
             fast_start_at: Utc::now(),
+            clock_stats: Some(stats.clock()),
             ..FfmpegOptions::default()
         };
         let mut sources = Vec::new();
@@ -107,7 +109,9 @@ impl Pipeline {
                 backpressure,
             });
         }
-        Ok(Self::with_sources(cfg, bundle, store, sources, opts))
+        let mut pipeline = Self::with_sources(cfg, bundle, store, sources, opts);
+        pipeline.stats = stats;
+        Ok(pipeline)
     }
 
     /// Use explicit sources (tests, offline tools).

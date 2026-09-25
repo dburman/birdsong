@@ -97,6 +97,8 @@ curl -s "$PI/api/v1/health"
   "seconds_since_last_chunk": 3.1,
   "stats": {
     "chunks_processed": 1200, "chunks_dropped": 0, "masked_chunks": 4, "gaps": 0,
+    "clock_reanchors": 0, "clock_samples_inserted": 24192, "clock_samples_dropped": 0,
+    "clock_correction_ppm": 140.0,
     "detections": 57, "unconfirmed_detections": 0, "inference_errors": 0, "store_errors": 0,
     "clips_written": 41, "clip_errors": 0, "mean_inference_ms": 312.5,
     "last_chunk_at": "2026-05-15T10:59:57.000000Z",
@@ -110,6 +112,15 @@ measured from when it was processed (wall clock). A growing `seconds_since_last_
 means the computer cannot keep up with inference. `unconfirmed_detections` counts detections
 dropped because their species never repeated inside `detection.confirmation_window_seconds`; it
 stays `0` unless `detection.min_detections` is raised above `1`.
+
+The `clock_*` fields describe the microphone's clock. A capture clock rarely runs at exactly
+48 kHz; Birdsong keeps its timeline in step with the computer's clock by repeating or skipping
+single samples (`clock_samples_inserted` / `clock_samples_dropped`, at most 1 in 1 000), and
+`clock_correction_ppm` is the net rate (positive: the microphone runs slow; 140 ppm, 2 s every
+4 hours, is typical for a USB microphone). `clock_reanchors` counts the times the timestamps
+jumped to the wall clock instead: a stalled or restarted source, or drift faster than the
+correction can follow. Each re-anchor also counts in `gaps`, which counts every discontinuity in
+the audio timeline; `gaps` minus `clock_reanchors` is audio that went missing.
 
 ### `GET /api/v1/detections`
 
@@ -295,7 +306,9 @@ birdsong_build_info{version="0.1.0",model="birdnet-v2.4",station="Backyard"} 1
 Also exported: `birdsong_uptime_seconds`, `birdsong_masked_chunks_total`,
 `birdsong_audio_gaps_total`, `birdsong_detections_total`, `birdsong_inference_errors_total`,
 `birdsong_store_errors_total`, `birdsong_clips_written_total`, `birdsong_clip_errors_total`,
-`birdsong_unconfirmed_detections_total`.
+`birdsong_unconfirmed_detections_total`, `birdsong_clock_reanchors_total`,
+`birdsong_clock_samples_inserted_total`, `birdsong_clock_samples_dropped_total`,
+`birdsong_clock_correction_ppm`.
 
 ### `GET /api/v1/config`
 
