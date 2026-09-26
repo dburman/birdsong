@@ -11,6 +11,7 @@
 //! end early, and an upload in progress stops before its next request. A request already on the
 //! wire is bounded by the client timeouts (5 s to connect, 15 s in total).
 
+use std::collections::HashSet;
 use std::fmt;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
@@ -85,8 +86,33 @@ pub struct DetectionUpload {
     pub soundscape_end_time: f64,
     pub common_name: String,
     pub scientific_name: String,
-    pub algorithm: String,
+    /// The model that made the detection; left out for models BirdWeather has no code for.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub algorithm: Option<String>,
     pub confidence: f32,
+}
+
+/// What a station sends: BirdNET V2.4 detections as algorithm `2p4`; other models' detections
+/// restricted to birds, with no algorithm claimed.
+#[derive(Clone, Debug, Default)]
+pub struct UploadPolicy {
+    /// `algorithm` sent with each detection; `None` leaves the field out.
+    pub algorithm: Option<String>,
+    /// When set, only these species (scientific names) are uploaded.
+    pub birds: Option<Arc<HashSet<String>>>,
+}
+
+impl UploadPolicy {
+    pub fn birdnet_v24() -> Self {
+        Self {
+            algorithm: Some(ALGORITHM_V24.into()),
+            birds: None,
+        }
+    }
+
+    fn allows(&self, scientific: &str) -> bool {
+        self.birds.as_ref().is_none_or(|b| b.contains(scientific))
+    }
 }
 
 #[derive(Deserialize)]
@@ -286,6 +312,8 @@ pub struct WindowResult {
     pub detections_posted: usize,
     /// Detections BirdWeather refused with 422, typically species it does not accept.
     pub detections_refused: usize,
+    /// Detections not sent because the policy only uploads birds.
+    pub not_birds: usize,
 }
 
 /// Upload one clip as a soundscape, then its detections. Blocking; stops early on `cancel`.
@@ -293,8 +321,19 @@ pub fn upload_window(
     client: &BirdWeatherClient,
     station: Station,
     job: &UploadJob,
+    policy: &UploadPolicy,
     cancel: &CancellationToken,
 ) -> Result<WindowResult, UploadError> {
+    let mut result = WindowResult::default();
+    let detections: Vec<_> = job
+        .detections
+        .iter()
+        .filter(|(scientific, _, _)| policy.allows(scientific))
+        .collect();
+    result.not_birds = job.detections.len() - detections.len();
+    if detections.is_empty() {
+        return Ok(result); // nothing to report: do not upload the soundscape either
+    }
     let flac = birdsong_audio::flac::encode_flac(&job.clip_samples, SAMPLE_RATE_HZ)
         .map_err(|e| UploadError::Encode(e.to_string()))?;
     let soundscape_id = client.upload_soundscape(
@@ -308,8 +347,7 @@ pub fn upload_window(
         .clamp(0.0, clip_seconds);
     let end = (start + f64::from(job.window_seconds)).min(clip_seconds);
 
-    let mut result = WindowResult::default();
-    for (scientific, common, confidence) in &job.detections {
+    for (scientific, common, confidence) in detections {
         let upload = DetectionUpload {
             timestamp: station_timestamp(job.chunk_start_at, station.timezone),
             lat: station.latitude,
@@ -319,7 +357,7 @@ pub fn upload_window(
             soundscape_end_time: end,
             common_name: common.clone(),
             scientific_name: scientific.clone(),
-            algorithm: ALGORITHM_V24.into(),
+            algorithm: policy.algorithm.clone(),
             confidence: *confidence,
         };
         match client.post_detection(&upload, cancel) {
@@ -342,7 +380,9 @@ pub async fn upload_task(
     mut jobs: mpsc::Receiver<UploadJob>,
     stats: Arc<PipelineStats>,
     cancel: CancellationToken,
+    policy: UploadPolicy,
 ) {
+    let policy = Arc::new(policy);
     let mut skipped = 0u64;
     while let Some(job) = jobs.recv().await {
         if cancel.is_cancelled() {
@@ -352,15 +392,24 @@ pub async fn upload_task(
         }
         let client = Arc::clone(&client);
         let token = cancel.clone();
-        let outcome =
-            tokio::task::spawn_blocking(move || upload_window(&client, station, &job, &token))
-                .await;
+        let window_policy = Arc::clone(&policy);
+        let outcome = tokio::task::spawn_blocking(move || {
+            upload_window(&client, station, &job, &window_policy, &token)
+        })
+        .await;
         match outcome {
+            Ok(Ok(result)) if result.detections_posted + result.detections_refused == 0 => {
+                tracing::debug!(
+                    not_birds = result.not_birds,
+                    "nothing for BirdWeather in this clip"
+                );
+            }
             Ok(Ok(result)) => {
                 stats.birdweather_uploaded(result.detections_posted as u64);
                 tracing::info!(
                     posted = result.detections_posted,
                     refused = result.detections_refused,
+                    not_birds = result.not_birds,
                     "uploaded to BirdWeather"
                 );
             }
@@ -421,7 +470,7 @@ mod tests {
             soundscape_end_time: 4.5,
             common_name: "Black-capped Chickadee".into(),
             scientific_name: "Poecile atricapillus".into(),
-            algorithm: ALGORITHM_V24.into(),
+            algorithm: Some(ALGORITHM_V24.into()),
             confidence: 0.75,
         };
         let v = serde_json::to_value(&upload).unwrap();
@@ -443,6 +492,12 @@ mod tests {
             ]
         );
         assert_eq!(v["algorithm"], "2p4");
+        let perch = DetectionUpload {
+            algorithm: None,
+            ..upload.clone()
+        };
+        let v = serde_json::to_value(&perch).unwrap();
+        assert!(v.get("algorithm").is_none(), "no algorithm is claimed: {v}");
     }
 
     #[test]

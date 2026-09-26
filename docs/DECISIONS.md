@@ -504,3 +504,27 @@ One entry per non-obvious decision. Newest at the bottom. Format: Decision / Why
   stamping frames at an estimated sample rate (see above); a smaller re-anchor tolerance (more
   frequent, smaller jumps, each still realigning the windows); hashing species names to colours
   (two of a day's species could share a colour).
+
+## 30. 2026-09-26 — Perch v2 is the default; the model choice sets its own defaults; birds to BirdWeather
+
+- **Decision.**
+  - `model.kind` defaults to `"perch-v2"`. Choosing a model also chooses its files and detection
+    defaults: Perch uses the full model, the BirdNET Geomodel as location filter, confidence 0.5
+    and repeat confirmation (2 detections within 30 s); BirdNET uses its converted model, its own
+    location model, confidence 0.7 and no confirmation. Keys set in the file or the environment
+    still win. An explicitly chosen `model.meta_model` does not inherit the default model's label
+    file, and an empty path turns an optional file off. `birdsong analyze` and `species-list` take
+    `--kind` when run without `--config`.
+  - BirdWeather uploads work with Perch: only species known to be birds are sent (Geomodel eBird
+    codes, or BirdNET's labels for species the Geomodel lacks), clips without a bird are not
+    uploaded, and the undocumented `algorithm` field is left out rather than claiming BirdNET V2.4.
+- **Why.** A station ran BirdNET-Pi and Birdsong side by side for ten days: Birdsong's BirdNET
+  matched BirdNET-Pi and Perch found more birds that a second model agreed with (docs/MODEL.md),
+  and the owner chose Perch for the station. Perch is also Apache-2.0 where BirdNET is
+  non-commercial, and needs no TensorFlow conversion. Switching models used to mean changing five
+  files and three thresholds together; now it is one line. BirdWeather is a bird platform, and
+  BirdNET's own label list contains 79 frogs, insects and a monkey, so it cannot be the bird test;
+  the Geomodel's codes can.
+- **Rejected.** Keeping BirdNET the default (the station chose Perch; BirdNET remains one line
+  away); sending `2p4` for Perch as BirdNET-Pi and BirdNET-Go do for any model (misattributes the
+  detection); leaving uploads off with Perch (the station wanted to keep contributing).

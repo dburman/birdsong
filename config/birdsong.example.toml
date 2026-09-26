@@ -21,7 +21,9 @@ device = "plughw:CARD=Device,DEV=0"  # list yours with `birdsong devices`; card 
 gain_db = 0.0
 
 [detection]
-min_confidence = 0.7            # BirdNET-Pi CONFIDENCE
+# min_confidence, min_detections and confirmation_window_seconds default per model:
+# Perch 0.5 / 2 / 30 s, BirdNET 0.7 / 1 / 15 s. Set them here to override.
+# min_confidence = 0.5          # BirdNET-Pi CONFIDENCE
 sensitivity = 1.25              # BirdNET-Pi SENSITIVITY, 0.5..=1.5
 overlap_seconds = 0.0           # BirdNET-Pi OVERLAP, 0.0..<3.0
 species_filter_threshold = 0.03 # location filter threshold (BirdNET SF_THRESH)
@@ -31,9 +33,9 @@ exclude_species = []            # scientific names never reported
 privacy_filter = true           # BirdNET-Pi human-voice mask
 privacy_threshold = 0.0         # percent 0..100; higher is stricter
 
-# Optional detection-quality filters, both off by default (BirdNET-Pi behaviour).
-min_detections = 1              # hits of a species needed before any are stored; 2 with overlap cuts one-off false positives
-confirmation_window_seconds = 15.0
+# Repeat confirmation (on for Perch by default, off for BirdNET) and dynamic thresholds (off).
+# min_detections = 2            # hits of a species needed within the window before any are stored
+# confirmation_window_seconds = 30.0
 confirmation_exempt_species = []  # stored without confirmation, e.g. ["Strix varia", "Gavia immer"]
 dynamic_threshold = false       # after a clear detection, lower that species' threshold for a while
 dynamic_threshold_trigger = 0.9 # confidence that counts as clear (must be above min_confidence)
@@ -42,24 +44,23 @@ dynamic_threshold_hours = 24
 
 [model]
 dir = "/models"
-kind = "birdnet-v2.4"                        # or "perch-v2" (see below and docs/MODEL.md)
-classifier = "birdnet-v2.4-headless.onnx"   # see docs/MODEL.md
-labels = "labels/en_us.txt"
-meta_model = "meta-model.onnx"              # location/week filter; remove to disable
-# species_list = "/config/species.txt"      # precomputed allowed list; overrides meta_model
-threads = 0                                  # 0 = CPUs - 1
-# Perch v2 instead (scripts/fetch-perch.sh): 5 s windows, softmax confidences, birds plus frogs,
-# insects and mammals. BirdWeather uploads are turned off; recalibrate detection.min_confidence
-# (softmax scores run lower). The location filter maps Perch species to BirdNET's by name.
-# kind = "perch-v2"
+# Which classifier to run. The rest of this section, and the detection thresholds above, default to
+# what that model needs; set a key only to override it. See docs/MODEL.md.
+#   "perch-v2"      Google Perch v2 (default): birds, frogs, insects and mammals; 5 s windows.
+#                   Files: scripts/fetch-perch.sh and scripts/fetch-geomodel.sh.
+#   "birdnet-v2.4"  BirdNET V2.4: birds; 3 s windows; BirdNET-Pi's model. Files: scripts/fetch-models.sh.
+kind = "perch-v2"
+# Perch defaults (shown for reference):
 # classifier = "perch/perch_v2_no_dft_fp32.onnx"
 # labels = "perch/perch_v2_labels.txt"
-# common_names = "labels/en_us.txt"          # BirdNET labels: common names and the location filter
-# The BirdNET Geomodel (scripts/fetch-geomodel.sh) filters birds and other animals by location and
-# names them; recommended with Perch:
-# meta_model = "geomodel/BirdNET+_Geomodel_V3.0.4_Global_14K_FP32.onnx"
+# meta_model = "geomodel/BirdNET+_Geomodel_V3.0.4_Global_14K_FP32.onnx"   # "" turns the location filter off
 # meta_model_labels = "geomodel/BirdNET+_Geomodel_V3.0.4_Global_14K_Labels.txt"
-# location_filter_unmapped = "allow"         # Perch species BirdNET does not know: "allow" or "block"
+# common_names = "labels/en_us.txt"          # optional BirdNET labels: names for species the Geomodel lacks
+# location_filter_unmapped = "allow"         # species the location model does not know: "allow" or "block"
+# BirdNET defaults: classifier = "birdnet-v2.4-headless.onnx", labels = "labels/en_us.txt",
+# meta_model = "meta-model.onnx".
+# species_list = "/config/species.txt"      # precomputed allowed list; overrides meta_model
+threads = 0                                  # 0 = CPUs - 1
 
 [storage]
 data_dir = "/data"
@@ -75,7 +76,8 @@ detection_rows_max_age_days = 0     # 0 = keep detection rows forever
 purge_interval_minutes = 30
 
 [birdweather]
-token = ""                      # BirdWeather station token; empty disables uploads (needs station latitude/longitude)
+token = ""                      # BirdWeather station token; empty disables uploads (needs station latitude/longitude).
+                                # With Perch only birds are uploaded; frogs, insects and mammals stay local.
 
 [server]
 bind = "0.0.0.0:8080"

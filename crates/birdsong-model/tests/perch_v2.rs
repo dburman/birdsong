@@ -102,6 +102,12 @@ location_filter_unmapped = "{unmapped}"
     };
     let bundle = ModelBundle::load(&config("allow")).unwrap();
     assert!(bundle.has_species_filter());
+    let birds = bundle
+        .bird_species()
+        .expect("BirdNET's labels tell birds apart");
+    assert!(birds.contains("Poecile atricapillus"));
+    assert!(birds.contains("Strix varia"));
+    assert!(!birds.contains("Vulpes vulpes"), "not in BirdNET's labels");
     let filter = bundle.species_filter_for_week(20).unwrap();
     let index = |name: &str| bundle.labels.index_of_scientific(name).unwrap();
     assert!(
@@ -212,6 +218,13 @@ confirmation_exempt_species = ["Strix varia"]
     .unwrap();
     let bundle = ModelBundle::load(&cfg).unwrap();
     let index = |name: &str| bundle.labels.index_of_scientific(name).unwrap();
+    let birds = bundle
+        .bird_species()
+        .expect("the Geomodel tells birds apart");
+    assert!(birds.contains("Poecile atricapillus"));
+    assert!(!birds.contains("Vulpes vulpes"), "a fox is not a bird");
+    assert!(!birds.contains("Alces alces"));
+    assert!(!birds.contains("Rain"));
     assert_eq!(
         bundle.labels.get(index("Vulpes vulpes")).unwrap().common,
         "Red Fox"

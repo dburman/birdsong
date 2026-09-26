@@ -25,7 +25,7 @@ use tokio::sync::{broadcast, mpsc};
 use tokio::task::JoinSet;
 use tokio_util::sync::CancellationToken;
 
-use crate::birdweather::{upload_task, BirdWeatherClient, Station};
+use crate::birdweather::{upload_task, BirdWeatherClient, Station, UploadPolicy};
 use crate::clips::{clip_task, ClipJob, ClipMsg, ClipSettings};
 use crate::queue::{Backpressure, ChunkQueue, ConsumerGuard, PushOutcome, QueueItem};
 use crate::stats::{PipelineStats, StatsSnapshot};
@@ -183,6 +183,15 @@ impl Pipeline {
             prepared.push((spec, chunker));
         }
 
+        // BirdNET V2.4 uploads as `2p4`; other models upload birds only and claim no algorithm.
+        let upload_policy = if model_id == BIRDNET_V24_MODEL_ID {
+            Some(UploadPolicy::birdnet_v24())
+        } else {
+            bundle.bird_species().map(|birds| UploadPolicy {
+                algorithm: None,
+                birds: Some(Arc::new(birds.clone())),
+            })
+        };
         let worker = {
             let queue = Arc::clone(&queue);
             let stats = Arc::clone(&stats);
@@ -193,15 +202,18 @@ impl Pipeline {
                 .spawn(move || inference_worker(bundle, queue, results_tx, stats, detection, tz))
                 .context("starting inference thread")?
         };
-        // BirdWeather records detections as BirdNET V2.4 results, so other models do not upload.
-        let birdweather = cfg.birdweather.enabled()
-            && if model_id == BIRDNET_V24_MODEL_ID {
-                true
-            } else {
-                tracing::warn!(model = %model_id, "BirdWeather uploads need BirdNET V2.4; uploads are off");
-                false
-            };
-        let (upload_tx, uploads) = if birdweather {
+        let upload_policy = match (cfg.birdweather.enabled(), upload_policy) {
+            (true, None) => {
+                tracing::warn!(
+                    model = %model_id,
+                    "BirdWeather needs the Geomodel labels (model.meta_model_labels) or BirdNET's \
+                     labels (model.common_names) to tell birds from other animals; uploads are off"
+                );
+                None
+            }
+            (enabled, policy) => policy.filter(|_| enabled),
+        };
+        let (upload_tx, uploads) = if let Some(policy) = upload_policy {
             let (tx, rx) = mpsc::channel(UPLOAD_CHANNEL);
             let client = Arc::new(BirdWeatherClient::new(
                 &cfg.birdweather.api_url,
@@ -212,7 +224,11 @@ impl Pipeline {
                 longitude: cfg.station.longitude,
                 timezone: cfg.station.timezone,
             };
-            tracing::info!("BirdWeather uploads enabled");
+            tracing::info!(
+                birds_only = policy.birds.is_some(),
+                algorithm = policy.algorithm.as_deref().unwrap_or("(none)"),
+                "BirdWeather uploads enabled"
+            );
             (
                 Some(tx),
                 Some(tokio::spawn(upload_task(
@@ -221,6 +237,7 @@ impl Pipeline {
                     rx,
                     Arc::clone(&stats),
                     cancel.clone(),
+                    policy,
                 ))),
             )
         } else {

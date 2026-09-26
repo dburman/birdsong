@@ -15,9 +15,18 @@ fn models() -> Option<PathBuf> {
         .then_some(dir)
 }
 
+/// These tests check BirdNET V2.4 output, so they select it unless a test chooses otherwise.
 fn birdsong(args: &[&str]) -> Output {
+    let tool = matches!(args.first(), Some(&"analyze" | &"species-list"));
+    let chosen = args.iter().any(|a| *a == "--kind" || *a == "--config");
+    let extra: &[&str] = if tool && !chosen {
+        &["--kind", "birdnet-v2.4"]
+    } else {
+        &[]
+    };
     let out = Command::new(env!("CARGO_BIN_EXE_birdsong"))
         .args(args)
+        .args(extra)
         .current_dir(repo_root())
         .output()
         .unwrap();

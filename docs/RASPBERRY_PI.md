@@ -13,27 +13,41 @@ clips for a rolling window, and serves the dashboard and API on port 8080.
 
 ## 1. Get the models (once)
 
-The BirdNET models are licensed CC BY-NC-SA 4.0 (non-commercial) and are not in the image. The
-conversion step needs TensorFlow, so run it on any machine with Docker; a laptop is faster than the Pi.
+Birdsong uses Google's Perch v2 by default (Apache-2.0; birds, frogs, insects and mammals) with the
+BirdNET Geomodel as its location filter. Both download with curl, no conversion:
 
 ```bash
 git clone https://github.com/dburman/birdsong.git
 cd birdsong
+scripts/fetch-perch.sh
+```
+
+```bash
+scripts/fetch-geomodel.sh
+```
+
+That is 430 MB. Copy the resulting `models/` directory to the Pi next to `docker-compose.yml` if you
+ran it elsewhere. The default configuration expects exactly these files.
+
+### Optional: BirdNET V2.4
+
+`model.kind = "birdnet-v2.4"` runs BirdNET-Pi's model instead. It is licensed CC BY-NC-SA 4.0
+(non-commercial) and needs a conversion step with TensorFlow, so run it on any machine with Docker:
+
+```bash
 scripts/fetch-models.sh
 ```
 
-It downloads the two official archives (Keras and TFLite, about 200 MB) from Zenodo, verifies their checksums, converts it in a throwaway
-container, and checks that the converted model reproduces the reference results. Copy the resulting
-`models/` directory to the Pi next to `docker-compose.yml` if you ran it elsewhere.
+It downloads the two official archives (Keras and TFLite, about 200 MB) from Zenodo, verifies their
+checksums, converts them in a throwaway container, and checks that the converted model reproduces
+the reference results. With Perch, its label file can also be set as `model.common_names` to name
+the few species the Geomodel does not.
 
-### Optional: Perch v2 instead of BirdNET
+### Perch on a Raspberry Pi
 
-Google's Perch v2 (Apache-2.0) also recognises frogs, insects and mammals. It needs no conversion,
-only curl:
-
-```bash
-scripts/fetch-perch.sh north-america-east
-```
+`scripts/fetch-perch.sh` fetches the full model by default; `scripts/fetch-perch.sh north-america-east`
+fetches a regional slice instead (then set `model.classifier` and `model.labels` to the files it
+names).
 
 On a Pi 4 a regional model analyses a 5 second window in about 1.7 s on one core using 245 MiB;
 `full` (413 MB) takes about 2.7 s and 1.1 GB, so it needs a Pi with 2 GB or more. A regional model
@@ -42,10 +56,9 @@ is the more complete choice. For that filter use the BirdNET Geomodel (`scripts/
 15 MB): unlike BirdNET's location model it also knows mammals, frogs and insects, so it keeps a red
 fox and rejects a koala, and it gives Perch's species common names. Consider
 `detection.min_detections = 2` with `detection.confirmation_exempt_species` for animals that call
-rarely, such as owls and loons. The script prints the `[model]` settings to use. Perch analyses 5 second
-windows, its confidences are lower than BirdNET's (start with `detection.min_confidence = 0.3`),
-and BirdWeather uploads are turned off. Keep `scripts/fetch-models.sh` too: the BirdNET labels and
-location model give Perch English common names and the location filter.
+rarely, such as owls and loons. Perch analyses 5 second windows and its confidences are lower than
+BirdNET's; the defaults for Perch (confidence 0.5, two detections within 30 s) came from comparing it
+with a BirdNET-Pi station.
 
 ## 2. Build or copy the image
 
@@ -131,8 +144,8 @@ it as `BIRDSONG__BIRDWEATHER__TOKEN` so it stays out of the file):
 token = "your-station-token"
 ```
 
-Uploads need `station.latitude` and `station.longitude` and the BirdNET model (they are turned
-off with Perch). Every saved clip is sent as a FLAC
+Uploads need `station.latitude` and `station.longitude`. With Perch only birds are uploaded; frogs,
+insects and mammals stay on the station. Every saved clip is sent as a FLAC
 soundscape together with the detections in it, the same way BirdNET-Pi does. Detections hidden by
 the privacy filter have no clip and are never uploaded. Uploads run in the background: if
 BirdWeather is slow or unreachable, clips are skipped for upload rather than delayed, and

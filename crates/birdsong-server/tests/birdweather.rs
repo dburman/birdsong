@@ -15,7 +15,7 @@ use birdsong_audio::{Pacing, WavFileSource};
 use birdsong_core::Config;
 use birdsong_model::ModelBundle;
 use birdsong_server::birdweather::{
-    upload_task, upload_window, BirdWeatherClient, Station, UploadJob,
+    upload_task, upload_window, BirdWeatherClient, Station, UploadJob, UploadPolicy,
 };
 use birdsong_server::{Backpressure, Pipeline, PipelineOptions, PipelineStats, SourceSpec};
 use birdsong_store::{SqliteStore, StoreOptions};
@@ -153,6 +153,56 @@ const BOSTON: Station = Station {
     timezone: chrono_tz::America::New_York,
 };
 
+/// Perch: only birds go to BirdWeather, and no BirdNET algorithm code is claimed. A clip with
+/// no bird in it is not uploaded at all.
+#[tokio::test(flavor = "multi_thread")]
+async fn perch_uploads_birds_only_without_an_algorithm() {
+    let (api, mock) = mock_server(Mock {
+        soundscape_success: true,
+        ..Default::default()
+    })
+    .await;
+    let policy = UploadPolicy {
+        algorithm: None,
+        birds: Some(Arc::new(
+            ["Poecile atricapillus".to_string()].into_iter().collect(),
+        )),
+    };
+    let mut with_fox = job();
+    with_fox.detections = vec![
+        (
+            "Poecile atricapillus".into(),
+            "Black-capped Chickadee".into(),
+            0.81,
+        ),
+        ("Vulpes vulpes".into(), "Red Fox".into(), 0.9),
+    ];
+    let mut fox_only = job();
+    fox_only.detections = vec![("Vulpes vulpes".into(), "Red Fox".into(), 0.9)];
+    let (first, second) = tokio::task::spawn_blocking(move || {
+        let client = BirdWeatherClient::new(&api, "tok_123");
+        let cancel = CancellationToken::new();
+        (
+            upload_window(&client, BOSTON, &with_fox, &policy, &cancel).unwrap(),
+            upload_window(&client, BOSTON, &fox_only, &policy, &cancel).unwrap(),
+        )
+    })
+    .await
+    .unwrap();
+    assert_eq!((first.detections_posted, first.not_birds), (1, 1));
+    assert_eq!((second.detections_posted, second.not_birds), (0, 1));
+
+    let m = mock.lock().unwrap();
+    assert_eq!(m.soundscapes.len(), 1, "the fox-only clip is not uploaded");
+    assert_eq!(m.detections.len(), 1);
+    assert_eq!(m.detections[0]["scientificName"], "Poecile atricapillus");
+    assert!(
+        m.detections[0].get("algorithm").is_none(),
+        "{}",
+        m.detections[0]
+    );
+}
+
 #[tokio::test(flavor = "multi_thread")]
 async fn uploads_soundscape_then_detections_like_birdnet_pi() {
     let (api, mock) = mock_server(Mock {
@@ -163,7 +213,13 @@ async fn uploads_soundscape_then_detections_like_birdnet_pi() {
     .await;
     let result = tokio::task::spawn_blocking(move || {
         let client = BirdWeatherClient::new(&api, "tok_123");
-        upload_window(&client, BOSTON, &job(), &CancellationToken::new())
+        upload_window(
+            &client,
+            BOSTON,
+            &job(),
+            &UploadPolicy::birdnet_v24(),
+            &CancellationToken::new(),
+        )
     })
     .await
     .unwrap()
@@ -211,7 +267,13 @@ async fn transient_failures_are_retried_and_rejections_are_not() {
     let result = tokio::task::spawn_blocking(move || {
         let mut client = BirdWeatherClient::new(&api2, "tok");
         client.retry_delays = vec![Duration::from_millis(10), Duration::from_millis(10)];
-        upload_window(&client, BOSTON, &job(), &CancellationToken::new())
+        upload_window(
+            &client,
+            BOSTON,
+            &job(),
+            &UploadPolicy::birdnet_v24(),
+            &CancellationToken::new(),
+        )
     })
     .await
     .unwrap()
@@ -231,7 +293,13 @@ async fn transient_failures_are_retried_and_rejections_are_not() {
     .await;
     let err = tokio::task::spawn_blocking(move || {
         let client = BirdWeatherClient::new(&api, "bad");
-        upload_window(&client, BOSTON, &job(), &CancellationToken::new())
+        upload_window(
+            &client,
+            BOSTON,
+            &job(),
+            &UploadPolicy::birdnet_v24(),
+            &CancellationToken::new(),
+        )
     })
     .await
     .unwrap()
@@ -251,7 +319,13 @@ async fn unreachable_server_fails_after_retries() {
     let err = tokio::task::spawn_blocking(move || {
         let mut client = BirdWeatherClient::new(&format!("http://127.0.0.1:{port}/api/v1"), "tok");
         client.retry_delays = vec![Duration::from_millis(5)];
-        upload_window(&client, BOSTON, &job(), &CancellationToken::new())
+        upload_window(
+            &client,
+            BOSTON,
+            &job(),
+            &UploadPolicy::birdnet_v24(),
+            &CancellationToken::new(),
+        )
     })
     .await
     .unwrap()
@@ -289,6 +363,7 @@ id = "file0"
 kind = "file"
 path = {fixture:?}
 [model]
+kind = "birdnet-v2.4"
 dir = {models:?}
 [storage]
 data_dir = {data:?}
@@ -380,7 +455,13 @@ async fn cancellation_ends_retry_waits_promptly() {
     let upload = tokio::task::spawn_blocking(move || {
         let mut client = BirdWeatherClient::new(&api, "tok");
         client.retry_delays = vec![Duration::from_secs(10), Duration::from_secs(10)];
-        upload_window(&client, BOSTON, &job(), &token)
+        upload_window(
+            &client,
+            BOSTON,
+            &job(),
+            &UploadPolicy::birdnet_v24(),
+            &token,
+        )
     });
     tokio::time::sleep(Duration::from_millis(300)).await;
     cancel.cancel();
@@ -418,6 +499,7 @@ async fn queued_uploads_are_skipped_after_shutdown() {
         rx,
         Arc::clone(&stats),
         cancel.clone(),
+        UploadPolicy::birdnet_v24(),
     ));
     tokio::time::sleep(Duration::from_millis(600)).await; // first upload done, second in flight
     cancel.cancel();

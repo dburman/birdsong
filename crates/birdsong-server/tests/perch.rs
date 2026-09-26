@@ -37,8 +37,6 @@ async fn perch_pipeline_uses_five_second_windows() {
 latitude = 42.36
 longitude = -71.06
 timezone = "America/New_York"
-[birdweather]
-token = "not-used-with-perch"
 [[audio.sources]]
 id = "file0"
 kind = "file"
@@ -51,6 +49,7 @@ labels = "perch/perch_v2_north-america-east_labels.txt"
 common_names = "labels/en_us.txt"
 [detection]
 min_confidence = 0.3
+min_detections = 1
 [storage]
 data_dir = {data:?}
 "#,
@@ -94,7 +93,7 @@ data_dir = {data:?}
     assert_eq!(
         summary.birdweather_soundscapes + summary.birdweather_errors,
         0,
-        "no uploads with Perch"
+        "no BirdWeather token, no uploads (tests never contact the real service)"
     );
 
     let rows = store

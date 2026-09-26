@@ -109,11 +109,25 @@ struct ToolArgs {
     /// Station longitude (overrides the configuration; needs --lat).
     #[arg(long, allow_negative_numbers = true)]
     lon: Option<f64>,
+    /// Model to use without --config: "perch-v2" (default) or "birdnet-v2.4".
+    #[arg(long, value_parser = parse_kind)]
+    kind: Option<birdsong_core::config::ModelKind>,
+}
+
+fn parse_kind(value: &str) -> Result<birdsong_core::config::ModelKind, String> {
+    birdsong_core::config::ModelKind::parse(value)
+        .ok_or_else(|| format!("expected \"perch-v2\" or \"birdnet-v2.4\", got {value:?}"))
 }
 
 impl ToolArgs {
     fn config(self) -> anyhow::Result<Config> {
-        analyze::tool_config(self.config.as_deref(), self.models, self.lat, self.lon)
+        analyze::tool_config(
+            self.config.as_deref(),
+            self.models,
+            self.lat,
+            self.lon,
+            self.kind,
+        )
     }
 }
 

@@ -3,15 +3,16 @@
 #
 #   scripts/fetch-perch.sh [REGION]
 #
-# REGION is a regional slice such as north-america-east (the default), central-europe or
-# british-isles, or "full" for the complete 14 795-class model (413 MB, more memory, slower).
+# REGION is "full" (the default: the complete 14 795-class model the default configuration uses,
+# 413 MB, about 1.1 GB of memory) or a smaller regional slice such as north-america-east,
+# central-europe or british-isles.
 # The list of regions is at https://huggingface.co/tphakala/Perch-v2-Models (regional/).
 # Files land in ./models/perch (override the models directory with MODELS_DIR). Needs curl.
 set -euo pipefail
 
 cd "$(dirname "$0")/.."
 MODELS_DIR=${MODELS_DIR:-models}
-REGION=${1:-north-america-east}
+REGION=${1:-full}
 # Pinned repository revision: files and checksums cannot change underneath us.
 REVISION=1214b70a9c14a855e366fe285f8df0e031d7b137
 BASE="https://huggingface.co/tphakala/Perch-v2-Models/resolve/$REVISION"

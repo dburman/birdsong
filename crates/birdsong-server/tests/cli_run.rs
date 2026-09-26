@@ -45,6 +45,7 @@ id = "file0"
 kind = "file"
 path = {fixture:?}
 [model]
+kind = "birdnet-v2.4"
 dir = {models:?}
 [storage]
 data_dir = {data:?}
@@ -114,7 +115,7 @@ fn run_fails_clearly_when_models_are_missing() {
     std::fs::write(
         &config_path,
         format!(
-            "[[audio.sources]]\nid = \"file0\"\nkind = \"file\"\npath = \"/nonexistent.wav\"\n[model]\ndir = \"/nonexistent-models\"\n[storage]\ndata_dir = {:?}\n[server]\nbind = \"127.0.0.1:0\"\n",
+            "[[audio.sources]]\nid = \"file0\"\nkind = \"file\"\npath = \"/nonexistent.wav\"\n[model]\nkind = \"birdnet-v2.4\"\ndir = \"/nonexistent-models\"\n[storage]\ndata_dir = {:?}\n[server]\nbind = \"127.0.0.1:0\"\n",
             dir.path().join("data").display().to_string()
         ),
     )

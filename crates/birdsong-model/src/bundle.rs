@@ -1,5 +1,7 @@
+use std::collections::HashSet;
+
 use birdsong_core::config::{ModelKind, UnmappedSpecies};
-use birdsong_core::Config;
+use birdsong_core::{Config, DetectionKind};
 
 use crate::{
     Classifier, Labels, MetaModel, ModelError, PerchClassifier, PostprocessConfig, SpeciesFilter,
@@ -38,6 +40,9 @@ pub struct ModelBundle {
     meta_map: Option<Vec<Option<usize>>>,
     /// The location model has no year-round mode (the Geomodel): use the maximum over 48 weeks.
     year_round_by_max: bool,
+    /// Classes known to be birds (scientific names), when the labels allow telling; `None` for
+    /// BirdNET, whose uploads are not restricted.
+    birds: Option<HashSet<String>>,
     allow_unmapped: bool,
     static_list: Option<SpeciesFilter>,
     location: Option<(f64, f64)>,
@@ -167,6 +172,10 @@ impl ModelBundle {
             }
         }
 
+        let birds = (!birdnet)
+            .then(|| bird_species(&labels, location_labels.as_ref(), birdnet_labels.as_ref()))
+            .flatten();
+
         let mut postprocess = PostprocessConfig::from_detection_config(&cfg.detection);
         postprocess.softmax = !birdnet;
 
@@ -177,6 +186,7 @@ impl ModelBundle {
             meta_model,
             meta_map,
             year_round_by_max: location_labels.is_some(),
+            birds,
             allow_unmapped: cfg.model.location_filter_unmapped == UnmappedSpecies::Allow,
             static_list,
             location,
@@ -271,6 +281,44 @@ impl ModelBundle {
         }
         Ok(max)
     }
+}
+
+impl ModelBundle {
+    /// Scientific names of the classes that are birds, for uploads restricted to birds.
+    pub fn bird_species(&self) -> Option<&HashSet<String>> {
+        self.birds.as_ref()
+    }
+}
+
+/// Which species are birds: the Geomodel's species codes are eBird codes for birds and numeric
+/// iNaturalist ids for other animals. Species it does not know count as birds when BirdNET's
+/// labels list them (mostly birds under older names). `None` when neither list is available.
+fn bird_species(
+    labels: &Labels,
+    geomodel: Option<&Labels>,
+    birdnet: Option<&Labels>,
+) -> Option<HashSet<String>> {
+    if geomodel.is_none() && birdnet.is_none() {
+        return None;
+    }
+    let is_bird = |scientific: &str| match geomodel
+        .and_then(|g| g.index_of_scientific(scientific).and_then(|i| g.get(i)))
+    {
+        Some(label) => label
+            .raw
+            .split('\t')
+            .next()
+            .is_some_and(|code| !code.is_empty() && !code.chars().all(|c| c.is_ascii_digit())),
+        None => birdnet.is_some_and(|b| b.index_of_scientific(scientific).is_some()),
+    };
+    Some(
+        labels
+            .iter()
+            .filter(|l| l.scientific.contains(' ') && l.kind() == DetectionKind::Animal)
+            .filter(|l| is_bird(&l.scientific))
+            .map(|l| l.scientific.clone())
+            .collect(),
+    )
 }
 
 /// Perch species are `Genus species`; sound events have no space.

@@ -11,7 +11,7 @@ use anyhow::Context;
 use birdsong_audio::{
     wav, AudioFrame, AudioSource, Chunker, ChunkerEvent, FfmpegOptions, FfmpegSource,
 };
-use birdsong_core::config::{AudioSourceConfig, AudioSourceKind, ModelConfig};
+use birdsong_core::config::{AudioSourceConfig, AudioSourceKind, ModelKind};
 use birdsong_core::{week_of_year, Config, SAMPLE_RATE_HZ, YEAR_ROUND_WEEK};
 use birdsong_model::{
     analyze_chunk_with, top_scores, ChunkContext, Confirmer, DynamicThresholds, ModelBundle,
@@ -28,18 +28,20 @@ pub fn tool_config(
     models: Option<PathBuf>,
     lat: Option<f64>,
     lon: Option<f64>,
+    kind: Option<ModelKind>,
 ) -> anyhow::Result<Config> {
-    let mut cfg = match config {
-        Some(path) => {
+    let mut cfg = match (config, kind) {
+        (Some(_), Some(_)) => {
+            anyhow::bail!("--kind cannot be combined with --config; set model.kind in the file")
+        }
+        (Some(path), None) => {
             Config::load(Some(path)).with_context(|| format!("loading {}", path.display()))?
         }
-        None => Config {
-            model: ModelConfig {
-                dir: PathBuf::from("models"),
-                ..ModelConfig::default()
-            },
-            ..Config::default()
-        },
+        (None, kind) => {
+            let mut cfg = Config::default_for(kind.unwrap_or_default());
+            cfg.model.dir = PathBuf::from("models");
+            cfg
+        }
     };
     if let Some(dir) = models {
         cfg.model.dir = dir;
@@ -588,14 +590,31 @@ mod tests {
 
     #[test]
     fn tool_config_overrides() {
-        let cfg = tool_config(None, Some("/m".into()), Some(1.0), Some(2.0)).unwrap();
+        let cfg = tool_config(None, Some("/m".into()), Some(1.0), Some(2.0), None).unwrap();
         assert_eq!(cfg.model.dir, PathBuf::from("/m"));
         assert_eq!((cfg.station.latitude, cfg.station.longitude), (1.0, 2.0));
         assert_eq!(
-            tool_config(None, None, None, None).unwrap().model.dir,
+            tool_config(None, None, None, None, None).unwrap().model.dir,
             PathBuf::from("models")
         );
-        assert!(tool_config(None, None, Some(1.0), None).is_err());
-        assert!(tool_config(None, None, Some(100.0), Some(0.0)).is_err());
+        assert!(tool_config(None, None, Some(1.0), None, None).is_err());
+        assert!(tool_config(None, None, Some(100.0), Some(0.0), None).is_err());
+        assert_eq!(
+            tool_config(None, None, None, None, None)
+                .unwrap()
+                .model
+                .kind,
+            ModelKind::PerchV2
+        );
+        let birdnet = tool_config(None, None, None, None, Some(ModelKind::BirdnetV24)).unwrap();
+        assert_eq!(birdnet.model.classifier, "birdnet-v2.4-headless.onnx");
+        assert!(tool_config(
+            Some(Path::new("x.toml")),
+            None,
+            None,
+            None,
+            Some(ModelKind::PerchV2)
+        )
+        .is_err());
     }
 }

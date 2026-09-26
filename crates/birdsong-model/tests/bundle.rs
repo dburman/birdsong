@@ -29,6 +29,7 @@ path = "/tmp/x.wav"
 [detection]
 exclude_species = ["Engine"]
 [model]
+kind = "birdnet-v2.4"
 dir = {:?}
 {list}
 "#,

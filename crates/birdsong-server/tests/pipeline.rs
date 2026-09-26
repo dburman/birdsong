@@ -46,6 +46,7 @@ id = "file0"
 kind = "file"
 path = {fixture:?}
 [model]
+kind = "birdnet-v2.4"
 dir = {models:?}
 [storage]
 data_dir = {data:?}

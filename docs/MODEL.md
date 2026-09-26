@@ -1,6 +1,6 @@
 # Model provenance and conversion
 
-## BirdNET V2.4 (default classifier)
+## BirdNET V2.4 (`model.kind = "birdnet-v2.4"`)
 
 | Item | Value |
 |------|-------|
@@ -111,7 +111,7 @@ on 3 minutes of recorded audio, while the Pi was also running BirdNET-Pi: 13× f
 time, 209 MiB peak memory, 1.2 s to load the model and analyse the first window. A Pi 4 core is
 about 9× slower than an M-series core here.
 
-## Perch v2 (optional classifier, `model.kind = "perch-v2"`)
+## Perch v2 (default classifier, `model.kind = "perch-v2"`)
 
 | Item | Value |
 |------|-------|
@@ -124,7 +124,7 @@ about 9× slower than an M-series core here.
 | Privacy filter | the 35 FSD50K classes in `PERCH_HUMAN_CLASSES` (`crates/birdsong-model/src/labels.rs`): voices (speech, conversation, singing, laughter, shouting, whispering, crying) and body or activity sounds (footsteps, coughs, sneezes, breathing, clapping), matching BirdNET's `Human vocal` / `Human non-vocal`. `Speech_synthesizer` is excluded. The rank cutoff is the same as for BirdNET |
 | Sound events | species and the animal sound events (`PERCH_ANIMAL_EVENTS`: dog, cat, frog, cricket, insect, …) are stored as `kind = "animal"`; the other 180 sound events (engines, rain, music, people) as `kind = "sound_event"`, kept out of the charts (decision #25) |
 | Location filter | BirdNET's location/week model, mapped to Perch classes by scientific name (needs `model.common_names` and `model.meta_model`). Of the full model's 14 597 species, 6 262 have a BirdNET name and are filtered by location; the other 8 335 (other taxa, and birds under a different scientific name, such as `Coloeus monedula` for BirdNET's `Corvus monedula`) are allowed by default or blocked with `model.location_filter_unmapped = "block"`. Sound events are never filtered |
-| Not available with Perch | BirdWeather uploads (BirdWeather records detections as BirdNET V2.4 results) |
+| BirdWeather | birds only: a species counts as a bird when the Geomodel lists it under an eBird code (numeric iNaturalist codes are other animals), or, for species the Geomodel does not know, when BirdNET's labels list it. The `algorithm` field, which BirdNET-Pi and BirdNET-Go always send as `2p4` (BirdNET V2.4), is left out, since BirdWeather's API documents no code for other models. Clips with no bird are not uploaded (decision #30) |
 
 ### Files (`scripts/fetch-perch.sh [REGION]`, under `models/perch/`, git-ignored)
 
