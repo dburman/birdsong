@@ -1,0 +1,9 @@
+tensorflow>=2.16,<2.21
+tf_keras
+tf2onnx
+onnx
+onnxruntime
+numpy
+soundfile
+h5py
+birdnet

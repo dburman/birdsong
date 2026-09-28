@@ -1,0 +1,51 @@
+# cargo deny check: licences, security advisories, banned crates and sources.
+# The ban list enforces DECISIONS.md #1: crates whose purpose is wrapping a C/C++ library through
+# FFI need the owner's approval before they are added.
+
+[graph]
+all-features = false
+
+[advisories]
+version = 2
+yanked = "deny"
+
+[licenses]
+version = 2
+confidence-threshold = 0.9
+allow = [
+  "MIT",
+  "Apache-2.0",
+  "Apache-2.0 WITH LLVM-exception",
+  "BSD-2-Clause",
+  "BSD-3-Clause",
+  "ISC",
+  "Zlib",
+  "Unicode-3.0",
+  "MPL-2.0",
+  "CDLA-Permissive-2.0",
+  "0BSD",
+  "BSL-1.0",
+]
+
+[bans]
+multiple-versions = "allow"
+wildcards = "deny"
+allow-wildcard-paths = true
+deny = [
+  { crate = "ort", reason = "FFI wrapper around ONNX Runtime (DECISIONS #1)" },
+  { crate = "ort-sys", reason = "FFI wrapper around ONNX Runtime (DECISIONS #1)" },
+  { crate = "tflitec", reason = "FFI wrapper around TensorFlow Lite (DECISIONS #1)" },
+  { crate = "tensorflow", reason = "FFI wrapper around TensorFlow (DECISIONS #1)" },
+  { crate = "tensorflow-sys", reason = "FFI wrapper around TensorFlow (DECISIONS #1)" },
+  { crate = "ffmpeg-next", reason = "FFI wrapper around libav; capture uses the ffmpeg executable (DECISIONS #10)" },
+  { crate = "ffmpeg-sys-next", reason = "FFI wrapper around libav (DECISIONS #10)" },
+  { crate = "alsa-sys", reason = "direct ALSA FFI (DECISIONS #1)" },
+  { crate = "openssl-sys", reason = "FFI to OpenSSL; use rustls (DECISIONS #1)" },
+  { crate = "native-tls", reason = "FFI to the platform TLS library; use rustls (DECISIONS #1)" },
+  { crate = "aws-lc-sys", reason = "FFI to AWS-LC; use the ring provider (DECISIONS #1)" },
+  { crate = "aws-lc-rs", reason = "FFI to AWS-LC; use the ring provider (DECISIONS #1)" },
+]
+
+[sources]
+unknown-registry = "deny"
+unknown-git = "deny"

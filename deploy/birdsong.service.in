@@ -1,0 +1,24 @@
+# Birdsong as a systemd service; installed by scripts/install-pi.sh, which fills in @USER@ and
+# @STATE_DIR@. Configuration: /etc/birdsong/birdsong.toml; secrets such as the BirdWeather token:
+# /etc/birdsong/birdsong.env (BIRDSONG__BIRDWEATHER__TOKEN=...), readable by root only.
+[Unit]
+Description=Birdsong: bird and wildlife sound detection
+Documentation=https://github.com/dburman/birdsong
+After=network-online.target sound.target
+Wants=network-online.target
+
+[Service]
+User=@USER@
+WorkingDirectory=@STATE_DIR@
+EnvironmentFile=-/etc/birdsong/birdsong.env
+ExecStart=/usr/local/bin/birdsong run --config /etc/birdsong/birdsong.toml
+Restart=on-failure
+RestartSec=15
+# The full Perch model needs about 1.1 GB.
+MemoryMax=2G
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=full
+
+[Install]
+WantedBy=multi-user.target

@@ -1,0 +1,297 @@
+# Running Birdsong on a Raspberry Pi
+
+Birdsong runs as one Docker container: it records from a USB microphone, detects birds, keeps
+clips for a rolling window, and serves the dashboard and API on port 8080.
+
+## What you need
+
+- Raspberry Pi 5 or 4B (2 GB RAM or more) with **64-bit** Raspberry Pi OS (Bookworm or later).
+- A USB microphone or USB sound card with a microphone.
+- Either nothing else (see *Install as a service* below), or Docker with the compose plugin:
+  `curl -fsSL https://get.docker.com | sh`, then `sudo usermod -aG docker $USER` and log in again.
+- Preferably a USB SSD for `data/`: clips and the database write continuously, which wears SD cards.
+
+## Install as a service (no Docker)
+
+The simplest setup on a Pi: Birdsong runs directly as a systemd service. Download the `aarch64`
+archive from the [releases page](https://github.com/dburman/birdsong/releases) (or build the binary
+yourself, below), then on the Pi, as your normal user:
+
+```bash
+tar xzf birdsong-v*-aarch64-unknown-linux-gnu.tar.gz && cd birdsong-v*-aarch64-unknown-linux-gnu
+```
+
+```bash
+./install-pi.sh --lat 42.36 --lon -71.06
+```
+
+It installs ffmpeg if needed, finds the USB microphone by its stable name, writes
+`/etc/birdsong/birdsong.toml`, downloads the Perch and Geomodel files into
+`/var/lib/birdsong/models` (430 MB), installs and starts the `birdsong` service, and waits until
+the dashboard answers on port 8080. For BirdWeather, put the station token in a file as
+`BIRDSONG__BIRDWEATHER__TOKEN=...` and pass `--env FILE`; it is installed readable by root only.
+`--config FILE` installs a configuration you already have instead of writing one.
+
+To upgrade, run the `install-pi.sh` of a newer archive: it replaces the binary and restarts the
+service, and keeps the configuration and data.
+
+| What | Where |
+|------|-------|
+| Program | `/usr/local/bin/birdsong` |
+| Configuration | `/etc/birdsong/birdsong.toml` (then `sudo systemctl restart birdsong`) |
+| Secrets | `/etc/birdsong/birdsong.env` |
+| Detections, clips | `/var/lib/birdsong/data` |
+| Models | `/var/lib/birdsong/models` |
+| Logs | `journalctl -u birdsong -f` |
+
+Building the binary yourself, on any machine with Docker (it compiles in Debian bookworm, so the
+result runs on Pi OS bookworm and later):
+
+```bash
+docker buildx build --platform linux/arm64 --target binary --output type=local,dest=out .
+```
+
+then copy `out/birdsong` to the Pi and run `scripts/install-pi.sh --binary birdsong` from a checkout
+of the repository.
+
+**Back up** `/etc/birdsong` and the database; clips are replaceable, detections are not:
+
+```bash
+sqlite3 /var/lib/birdsong/data/birdsong.sqlite ".backup '/path/to/backup/birdsong.sqlite'"
+```
+
+The rest of this guide describes the Docker setup.
+
+## 1. Get the models (once)
+
+Birdsong uses Google's Perch v2 by default (Apache-2.0; birds, frogs, insects and mammals) with the
+BirdNET Geomodel as its location filter. Both download with curl, no conversion:
+
+```bash
+git clone https://github.com/dburman/birdsong.git
+cd birdsong
+scripts/fetch-perch.sh
+```
+
+```bash
+scripts/fetch-geomodel.sh
+```
+
+That is 430 MB. Copy the resulting `models/` directory to the Pi next to `docker-compose.yml` if you
+ran it elsewhere. The default configuration expects exactly these files.
+
+### Optional: BirdNET V2.4
+
+`model.kind = "birdnet-v2.4"` runs BirdNET-Pi's model instead. It is licensed CC BY-NC-SA 4.0
+(non-commercial) and needs a conversion step with TensorFlow, so run it on any machine with Docker:
+
+```bash
+scripts/fetch-models.sh
+```
+
+It downloads the two official archives (Keras and TFLite, about 200 MB) from Zenodo, verifies their
+checksums, converts them in a throwaway container, and checks that the converted model reproduces
+the reference results. With Perch, its label file can also be set as `model.common_names` to name
+the few species the Geomodel does not.
+
+### Perch on a Raspberry Pi
+
+`scripts/fetch-perch.sh` fetches the full model by default; `scripts/fetch-perch.sh north-america-east`
+fetches a regional slice instead (then set `model.classifier` and `model.labels` to the files it
+names).
+
+On a Pi 4 a regional model analyses a 5 second window in about 1.7 s on one core using 245 MiB;
+`full` (413 MB) takes about 2.7 s and 1.1 GB, so it needs a Pi with 2 GB or more. A regional model
+can miss local species (see `docs/MODEL.md`); with enough memory, `full` with the location filter
+is the more complete choice. For that filter use the BirdNET Geomodel (`scripts/fetch-geomodel.sh`,
+15 MB): unlike BirdNET's location model it also knows mammals, frogs and insects, so it keeps a red
+fox and rejects a koala, and it gives Perch's species common names. Consider
+`detection.min_detections = 2` with `detection.confirmation_exempt_species` for animals that call
+rarely, such as owls and loons. Perch analyses 5 second windows and its confidences are lower than
+BirdNET's; the defaults for Perch (confidence 0.5, two detections within 30 s) came from comparing it
+with a BirdNET-Pi station.
+
+## 2. Build or copy the image
+
+On the Pi itself (about 15 to 30 minutes on a Pi 5):
+
+```bash
+docker compose build
+```
+
+Or build on a faster machine and copy it over:
+
+```bash
+docker buildx build --platform linux/arm64 -t birdsong:latest --load .
+docker save birdsong:latest | gzip > birdsong-arm64.tar.gz
+# on the Pi:
+gunzip -c birdsong-arm64.tar.gz | docker load
+```
+
+## 3. Find the microphone
+
+```bash
+docker compose run --rm birdsong devices
+```
+
+```text
+plughw:CARD=Device,DEV=0           card 3, device 0: USB Audio Device
+```
+
+Use the name on the left in the configuration. It stays the same across reboots; the card number
+does not (a USB microphone has been seen to move from card 1 to card 3 after a kernel upgrade), so
+avoid `hw:1,0`-style names. `birdsong check-config` and `birdsong run` warn when a source uses one.
+`plughw` also converts the sample rate and channel count if the microphone cannot record 48 kHz
+mono natively. Without Docker, `arecord -l` shows the same cards. Test a 5 second recording:
+
+```bash
+arecord -D plughw:CARD=Device,DEV=0 -f S16_LE -r 48000 -c 1 -d 5 test.wav && aplay test.wav
+```
+
+## 4. Configure
+
+```bash
+mkdir -p config data
+sudo chown 1000:1000 data
+cp config/birdsong.example.toml config/birdsong.toml
+nano config/birdsong.toml
+```
+
+Set at least:
+
+```toml
+[station]
+name = "Backyard"
+latitude = 42.36          # your location: limits detections to species expected there
+longitude = -71.06
+timezone = "America/New_York"
+
+[[audio.sources]]
+id = "mic0"
+kind = "alsa"
+device = "plughw:CARD=Device,DEV=0"
+```
+
+Keep `model.dir = "/models"` and `storage.data_dir = "/data"`; those are the paths inside the
+container. Check the file before starting:
+
+```bash
+docker compose run --rm birdsong check-config --config /config/birdsong.toml
+```
+
+The rolling window for saved audio is under `[retention]`: `clip_max_age_days` (default 14) and
+`clip_max_total_mb` (default 4096). Detection history is kept after clips are deleted.
+Clips are saved as FLAC by default (`storage.clip_format`), about a third the size of WAV with
+identical audio; the size cap counts each clip's audio and spectrogram together.
+
+## Optional: share detections with BirdWeather
+
+[BirdWeather](https://app.birdweather.com) collects detections from BirdNET stations worldwide.
+Create a station in the BirdWeather app, copy its token, and add it to the configuration (or pass
+it as `BIRDSONG__BIRDWEATHER__TOKEN` so it stays out of the file):
+
+```toml
+[birdweather]
+token = "your-station-token"
+```
+
+Uploads need `station.latitude` and `station.longitude`. With Perch only birds are uploaded; frogs,
+insects and mammals stay on the station. Every saved clip is sent as a FLAC
+soundscape together with the detections in it, the same way BirdNET-Pi does. Detections hidden by
+the privacy filter have no clip and are never uploaded. Uploads run in the background: if
+BirdWeather is slow or unreachable, clips are skipped for upload rather than delayed, and
+`birdweather_errors` in `/api/v1/health` counts them. The token is shown as `***` in `/api/v1/config`. On
+shutdown, uploads still queued are skipped rather than delaying the stop, and counted as
+`birdweather_skipped`; the container is given 30 seconds to finish what is in flight.
+
+## 5. Start
+
+```bash
+docker compose up -d
+docker compose logs -f
+```
+
+Within a few seconds you should see `HTTP API listening`, then `species filter updated`. Open
+`http://<pi-address>:8080/` for the dashboard. Each detection logs one line:
+
+```text
+INFO birdsong_server::pipeline: detection species="Black-capped Chickadee" conf=0.75 source=mic0 id=1
+```
+
+`docker compose ps` shows `healthy` once the API answers. `docker compose down` stops it; chunks
+already being analysed are finished and stored first.
+
+## Checking that it keeps up
+
+```bash
+curl -s http://localhost:8080/api/v1/health
+```
+
+- `seconds_since_last_chunk` should stay under about 5. If it grows, audio is not arriving: check
+  the device name and `docker compose logs` for ffmpeg errors.
+- `mean_inference_ms` is the time to analyse one 3 second window. It must stay well under 3000.
+- `chunks_dropped` should stay at 0. If it grows, the Pi cannot keep up: set
+  `detection.overlap_seconds = 0`, disable `storage.spectrograms`, or use a faster Pi.
+
+Single-stream inference takes about 25 ms per window on the development machine and **224 ms on
+a Raspberry Pi 4** (one core, measured), so a Pi 4 keeps up about 13 times over. A Pi 5 should be
+faster still.
+
+## Monitoring
+
+`http://<pi-address>:8080/metrics` is in Prometheus format. A scrape job:
+
+```yaml
+scrape_configs:
+  - job_name: birdsong
+    static_configs:
+      - targets: ["birdsong.local:8080"]
+```
+
+Useful alerts: `birdsong_seconds_since_last_chunk > 60` (audio stopped) and
+`rate(birdsong_chunks_dropped_total[10m]) > 0` (the Pi cannot keep up).
+
+## Memory use
+
+Memory is bounded by design; nothing grows with uptime or with the number of detections.
+
+| Part | Size |
+|------|------|
+| Classifier and location model weights | about 80 MB |
+| Ring buffer per audio source (`audio.ring_buffer_seconds`, default 90 s of 48 kHz float) | 17 MB |
+| Capture channel per source (64 frames of 100 ms) | 1.2 MB |
+| Inference queue (4 chunks, all sources) | 2.3 MB |
+| Detection broadcast and pending clip jobs | under 1 MB |
+
+With two sources the container used about 230 MiB in testing, so a 1 GB Pi is enough and 2 GB
+leaves room for the OS and Docker.
+
+## Load test
+
+Measured on the development machine with the linux/arm64 image, not on a Pi: two real-time
+sources replaying a 2-minute recording with `detection.overlap_seconds = 1.5` (1.33 windows per
+second in total), sampled after 60 seconds. The second run limits the container to 10 % of one
+core, which is far slower than a Raspberry Pi 4 is expected to be, to show what happens under
+overload.
+
+| Container CPU limit | Windows analysed | Windows dropped | Mean inference per window | Memory |
+|---------------------|-----------------:|----------------:|--------------------------:|-------:|
+| 1 core | 78 | 0 | 45 ms | 241 MiB |
+| 10 % of a core | 12 | 40 | 3 285 ms | 228 MiB |
+
+When inference cannot keep up, the oldest queued windows are dropped (counted in
+`chunks_dropped`, and their neighbours are blanked by the privacy filter), the newest audio is
+still analysed, and memory stays flat. Measure your own Pi with the health endpoint before
+enabling overlap or a second source.
+
+## Troubleshooting
+
+| Symptom | Likely cause and fix |
+|---------|----------------------|
+| `ffmpeg: ... Device or resource busy` | Another program holds the microphone. Stop it, or check `fuser -v /dev/snd/*`. |
+| `ffmpeg: ... No such file or directory` for the device | Wrong card name or number. Re-run `arecord -l`; use the `plughw:CARD=...` form. |
+| `Permission denied` on `/dev/snd` | The container needs `devices: /dev/snd` and `group_add: audio` (both in the compose file). |
+| `opening database` / permission errors on `/data` | `sudo chown -R 1000:1000 data`. |
+| `loading models ... No such file` | `models/` is not next to `docker-compose.yml`, or `scripts/fetch-models.sh` was not run. |
+| Dashboard shows "No audio for N s" | Same as the first two rows; the log shows ffmpeg restarting with its error. |
+| Many detections of `Engine`, `Dog` or `Human` | Expected near roads and houses; exclude them with `detection.exclude_species = ["Engine"]`. |

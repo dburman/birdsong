@@ -1,0 +1,22 @@
+[package]
+name = "birdsong-model"
+description = "Classifier inference: BirdNET V2.4 mel frontend + tract-onnx backend, labels, species filter, post-processing"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+repository.workspace = true
+publish.workspace = true
+
+[dependencies]
+birdsong-core.workspace = true
+anyhow.workspace = true
+thiserror.workspace = true
+chrono.workspace = true
+tract-onnx.workspace = true
+rustfft.workspace = true
+tracing.workspace = true
+
+[dev-dependencies]
+hound.workspace = true
+serde_json.workspace = true

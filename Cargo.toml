@@ -1,0 +1,71 @@
+[workspace]
+resolver = "2"
+members = [
+    "crates/birdsong-core",
+    "crates/birdsong-audio",
+    "crates/birdsong-model",
+    "crates/birdsong-store",
+    "crates/birdsong-server",
+]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2021"
+license = "MIT"
+rust-version = "1.94"  # sqlx 0.9
+repository = "https://github.com/dburman/birdsong"
+publish = false
+
+[workspace.dependencies]
+# internal
+birdsong-core = { path = "crates/birdsong-core" }
+birdsong-audio = { path = "crates/birdsong-audio" }
+birdsong-model = { path = "crates/birdsong-model" }
+birdsong-store = { path = "crates/birdsong-store" }
+
+# general
+anyhow = "1"
+thiserror = "2"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+toml = "1"
+config = { version = "0.15", default-features = false, features = ["toml"] }
+chrono = { version = "0.4", features = ["serde"] }
+chrono-tz = { version = "0.10", features = ["serde"] }
+clap = { version = "4", features = ["derive"] }
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+
+# async
+tokio = { version = "1", features = ["rt-multi-thread", "macros", "process", "io-util", "sync", "time", "signal", "fs"] }
+tokio-util = "0.7"
+async-trait = "0.1"
+
+# http
+axum = "0.8"
+tower = { version = "0.5", features = ["util"] }
+tower-http = { version = "0.7", features = ["cors", "compression-gzip", "trace", "fs"] }
+futures-util = "0.3"
+http-body-util = "0.1"
+
+# outbound HTTPS (BirdWeather): rustls with the ring provider, bundled Mozilla roots
+ureq = { version = "3.4", features = ["json"] }
+
+# storage
+sqlx = { version = "0.9", default-features = false, features = ["runtime-tokio", "sqlite", "sqlite-bundled", "migrate", "macros"] }
+
+# testing
+tempfile = "3"
+
+# audio / dsp / inference
+hound = "3.5"
+rustfft = "6"
+png = "0.18"
+flacenc = { version = "0.5", default-features = false }
+claxon = "0.4"
+tract-onnx = "0.23"
+
+[profile.release]
+opt-level = 3
+lto = "thin"
+codegen-units = 1

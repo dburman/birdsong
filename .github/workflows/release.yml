@@ -1,0 +1,76 @@
+name: Release
+
+# Builds installable archives for Linux on 64-bit ARM (Raspberry Pi) and x86-64. On a version tag
+# (v1.2.3) they are published as a GitHub release; run it by hand to get the same archives as
+# workflow artifacts without publishing anything.
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    name: archive (${{ matrix.target }})
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        include:
+          - platform: linux/arm64
+            target: aarch64-unknown-linux-gnu
+          - platform: linux/amd64
+            target: x86_64-unknown-linux-gnu
+    steps:
+      - uses: actions/checkout@v4
+      - uses: docker/setup-buildx-action@v3
+      # Built in Debian bookworm (glibc 2.36) like the Docker image, so it runs on Pi OS bookworm
+      # and later; the compiler runs natively and cross-compiles, no emulation.
+      - name: Build
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          target: binary
+          platforms: ${{ matrix.platform }}
+          outputs: type=local,dest=out
+          cache-from: type=gha,scope=release-${{ matrix.target }}
+          cache-to: type=gha,mode=max,scope=release-${{ matrix.target }}
+      - name: Package
+        run: |
+          set -eux
+          if [ "$GITHUB_REF_TYPE" = tag ]; then version="$GITHUB_REF_NAME"; else version="$(git rev-parse --short HEAD)"; fi
+          name="birdsong-${version}-${{ matrix.target }}"
+          mkdir -p "dist/$name"
+          install -m 0755 out/birdsong "dist/$name/birdsong"
+          install -m 0755 scripts/install-pi.sh scripts/fetch-perch.sh scripts/fetch-geomodel.sh "dist/$name/"
+          install -m 0644 deploy/birdsong.service.in config/birdsong.example.toml LICENSE README.md "dist/$name/"
+          tar -C dist -czf "dist/$name.tar.gz" "$name"
+          (cd dist && sha256sum "$name.tar.gz" > "$name.tar.gz.sha256")
+      - uses: actions/upload-artifact@v4
+        with:
+          name: birdsong-${{ matrix.target }}
+          path: |
+            dist/*.tar.gz
+            dist/*.tar.gz.sha256
+          if-no-files-found: error
+
+  publish:
+    name: publish release
+    if: github.ref_type == 'tag'
+    needs: build
+    runs-on: ubuntu-latest
+    steps:
+      # Only the archives: the Docker build step also uploads build records as artifacts.
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: birdsong-*
+          path: dist
+          merge-multiple: true
+      - name: Create release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release create "$GITHUB_REF_NAME" dist/* --repo "$GITHUB_REPOSITORY" \
+            --title "Birdsong $GITHUB_REF_NAME" \
+            --notes "Install or upgrade on a Raspberry Pi: download the aarch64 archive, extract it and run ./install-pi.sh (see docs/RASPBERRY_PI.md)."
