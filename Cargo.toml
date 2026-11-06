@@ -9,7 +9,7 @@ members = [
 ]
 
 [workspace.package]
-version = "0.1.0"
+version = "0.2.0"
 edition = "2021"
 license = "MIT"
 rust-version = "1.94"  # sqlx 0.9
@@ -49,7 +49,7 @@ futures-util = "0.3"
 http-body-util = "0.1"
 
 # outbound HTTPS (BirdWeather): rustls with the ring provider, bundled Mozilla roots
-ureq = { version = "3.4", features = ["json"] }
+ureq = { version = "3.5", features = ["json"] }
 
 # storage
 sqlx = { version = "0.9", default-features = false, features = ["runtime-tokio", "sqlite", "sqlite-bundled", "migrate", "macros"] }
@@ -63,7 +63,7 @@ rustfft = "6"
 png = "0.18"
 flacenc = { version = "0.5", default-features = false }
 claxon = "0.4"
-tract-onnx = "0.23"
+tract-onnx = "0.23.10"
 
 [profile.release]
 opt-level = 3

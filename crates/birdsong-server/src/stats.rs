@@ -1,7 +1,8 @@
 //! Lock-free counters shared by the pipeline and (later) the HTTP API.
 
+use std::collections::{BTreeMap, VecDeque};
 use std::sync::atomic::{AtomicI64, AtomicU64, Ordering};
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 
 use birdsong_audio::ClockStats;
 use std::time::Duration;
@@ -12,12 +13,47 @@ use serde::Serialize;
 /// Weight of the newest sample in the inference-time moving average.
 const EWMA_ALPHA: f64 = 0.1;
 
+/// Upper bounds of the buckets counting how confident the classifier was about the person class
+/// that put a chunk within the privacy rank cutoff.
+pub const PERSON_CONFIDENCE_BUCKETS: [f32; 7] = [0.001, 0.01, 0.05, 0.1, 0.25, 0.5, 1.0];
+
+/// Chunks kept in the privacy log (an hour of 5 s windows).
+pub const PRIVACY_LOG_CHUNKS: usize = 720;
+
+/// A person class in one chunk, for the privacy log.
+#[derive(Clone, Debug, PartialEq, Serialize)]
+pub struct PersonClass {
+    pub class: String,
+    /// 1 = the chunk's top class.
+    pub rank: usize,
+    pub confidence: f32,
+}
+
+/// What the privacy filter saw in one chunk. No audio is kept.
+#[derive(Clone, Debug, PartialEq, Serialize)]
+pub struct PrivacySample {
+    pub at: DateTime<Utc>,
+    pub source_id: String,
+    /// Best-ranked person class of any kind.
+    pub person: Option<PersonClass>,
+    /// Best-ranked voice class.
+    pub voice: Option<PersonClass>,
+    /// The chunk itself counted as having a person (its neighbours are then masked too).
+    pub person_present: bool,
+}
+
 /// Pipeline counters. Updated from the inference thread and storage task; read from anywhere.
 #[derive(Debug, Default)]
 pub struct PipelineStats {
     chunks_processed: AtomicU64,
     chunks_dropped: AtomicU64,
     masked_chunks: AtomicU64,
+    /// Chunks with a person class within the privacy rank cutoff, by that class's confidence
+    /// (non-cumulative, one per [`PERSON_CONFIDENCE_BUCKETS`] entry) and by class name.
+    person_by_confidence: [AtomicU64; PERSON_CONFIDENCE_BUCKETS.len()],
+    person_by_class: Mutex<BTreeMap<String, u64>>,
+    /// The newest [`PRIVACY_LOG_CHUNKS`] chunks, oldest first.
+    privacy_log: Mutex<VecDeque<PrivacySample>>,
     gaps: AtomicU64,
     detections: AtomicU64,
     unconfirmed_detections: AtomicU64,
@@ -45,6 +81,9 @@ pub struct StatsSnapshot {
     pub chunks_processed: u64,
     pub chunks_dropped: u64,
     pub masked_chunks: u64,
+    /// Chunks with a person class within the privacy rank cutoff, whether or not they were
+    /// masked; shows what `detection.privacy_min_confidence` would change.
+    pub privacy_person: PersonStats,
     /// Discontinuities in the audio timeline, whatever the cause (includes `clock_reanchors`).
     pub gaps: u64,
     /// Times a live source's timestamps jumped to the wall clock (a stall, a restart, or drift the
@@ -71,6 +110,22 @@ pub struct StatsSnapshot {
     pub last_chunk_at: Option<DateTime<Utc>>,
     /// When the newest chunk was processed (wall clock); use this for liveness checks.
     pub last_processed_at: Option<DateTime<Utc>>,
+}
+
+/// See [`StatsSnapshot::privacy_person`].
+#[derive(Clone, Debug, Default, PartialEq, Serialize)]
+pub struct PersonStats {
+    /// Chunks per confidence bucket, lowest first.
+    pub by_confidence: Vec<PersonBucket>,
+    /// Chunks per person class.
+    pub by_class: BTreeMap<String, u64>,
+}
+
+#[derive(Clone, Debug, PartialEq, Serialize)]
+pub struct PersonBucket {
+    /// Confidence above the previous bucket's bound and at most this.
+    pub up_to: f32,
+    pub chunks: u64,
 }
 
 impl PipelineStats {
@@ -107,6 +162,38 @@ impl PipelineStats {
 
     pub(crate) fn chunk_masked(&self) {
         self.masked_chunks.fetch_add(1, Ordering::Relaxed);
+    }
+
+    /// A person class ranked within the privacy cutoff.
+    pub(crate) fn person_ranked(&self, class: &str, confidence: f32) {
+        let bucket = PERSON_CONFIDENCE_BUCKETS
+            .iter()
+            .position(|&up_to| confidence <= up_to)
+            .unwrap_or(PERSON_CONFIDENCE_BUCKETS.len() - 1);
+        self.person_by_confidence[bucket].fetch_add(1, Ordering::Relaxed);
+        let mut by_class = self
+            .person_by_class
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
+        *by_class.entry(class.to_string()).or_default() += 1;
+    }
+
+    pub(crate) fn privacy_sample(&self, sample: PrivacySample) {
+        let mut log = self.privacy_log.lock().unwrap_or_else(|e| e.into_inner());
+        if log.len() == PRIVACY_LOG_CHUNKS {
+            log.pop_front();
+        }
+        log.push_back(sample);
+    }
+
+    /// The privacy log, oldest first.
+    pub fn privacy_log(&self) -> Vec<PrivacySample> {
+        self.privacy_log
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .iter()
+            .cloned()
+            .collect()
     }
 
     pub(crate) fn gap(&self) {
@@ -159,6 +246,21 @@ impl PipelineStats {
             chunks_processed: self.chunks_processed.load(Ordering::Relaxed),
             chunks_dropped: self.chunks_dropped.load(Ordering::Relaxed),
             masked_chunks: self.masked_chunks.load(Ordering::Relaxed),
+            privacy_person: PersonStats {
+                by_confidence: PERSON_CONFIDENCE_BUCKETS
+                    .iter()
+                    .zip(&self.person_by_confidence)
+                    .map(|(&up_to, n)| PersonBucket {
+                        up_to,
+                        chunks: n.load(Ordering::Relaxed),
+                    })
+                    .collect(),
+                by_class: self
+                    .person_by_class
+                    .lock()
+                    .unwrap_or_else(|e| e.into_inner())
+                    .clone(),
+            },
             gaps: self.gaps.load(Ordering::Relaxed),
             clock_reanchors: self.clock.reanchors(),
             clock_samples_inserted: self.clock.samples_inserted(),
@@ -191,9 +293,55 @@ mod tests {
     use chrono::TimeZone;
 
     #[test]
+    fn privacy_log_keeps_the_newest_chunks() {
+        let s = PipelineStats::new();
+        let t = Utc.with_ymd_and_hms(2026, 5, 1, 6, 0, 0).unwrap();
+        for i in 0..PRIVACY_LOG_CHUNKS + 3 {
+            s.privacy_sample(PrivacySample {
+                at: t + chrono::TimeDelta::seconds(5 * i as i64),
+                source_id: "mic0".into(),
+                person: None,
+                voice: None,
+                person_present: false,
+            });
+        }
+        let log = s.privacy_log();
+        assert_eq!(log.len(), PRIVACY_LOG_CHUNKS);
+        assert_eq!(log[0].at, t + chrono::TimeDelta::seconds(15));
+        assert!(log.windows(2).all(|w| w[0].at < w[1].at));
+    }
+
+    #[test]
+    fn person_confidence_buckets() {
+        let s = PipelineStats::new();
+        s.person_ranked("Speech", 0.0004);
+        s.person_ranked("Speech", 0.001); // bounds are inclusive
+        s.person_ranked("Breathing", 0.03);
+        s.person_ranked("Speech", 0.97);
+        let p = s.snapshot().privacy_person;
+        let counts: Vec<u64> = p.by_confidence.iter().map(|b| b.chunks).collect();
+        assert_eq!(counts, [2, 0, 1, 0, 0, 0, 1]);
+        assert_eq!(p.by_confidence[2].up_to, 0.05);
+        assert_eq!(p.by_class["Speech"], 3);
+        assert_eq!(p.by_class["Breathing"], 1);
+    }
+
+    #[test]
     fn counters_and_moving_average() {
         let s = PipelineStats::new();
-        assert_eq!(s.snapshot(), StatsSnapshot::default());
+        let empty = s.snapshot();
+        assert_eq!(
+            StatsSnapshot {
+                privacy_person: PersonStats::default(),
+                ..empty.clone()
+            },
+            StatsSnapshot::default()
+        );
+        assert!(empty
+            .privacy_person
+            .by_confidence
+            .iter()
+            .all(|b| b.chunks == 0));
         let t = Utc.with_ymd_and_hms(2026, 5, 1, 6, 0, 0).unwrap();
         s.chunk_processed(t, Duration::from_millis(100));
         assert_eq!(

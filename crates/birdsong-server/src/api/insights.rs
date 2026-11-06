@@ -39,6 +39,18 @@ pub async fn health(State(state): State<AppState>) -> Json<Value> {
     }))
 }
 
+/// `GET /privacy`: the privacy filter's settings and what it saw in the newest chunks.
+pub async fn privacy(State(state): State<AppState>) -> Json<Value> {
+    let d = &state.config.detection;
+    Json(json!({
+        "privacy_filter": d.privacy_filter,
+        "privacy_classes": d.privacy_classes.as_str(),
+        "rank_cutoff": birdsong_model::human_rank_cutoff(d.privacy_threshold),
+        "privacy_min_confidence": d.privacy_min_confidence,
+        "recent": state.stats.privacy_log(),
+    }))
+}
+
 /// Charts and species lists show animals unless `kind` says otherwise.
 const CHART_KIND: Option<DetectionKind> = Some(DetectionKind::Animal);
 

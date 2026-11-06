@@ -89,7 +89,7 @@ impl PerchClassifier {
         let input = Tensor::from_shape(&[1, INPUT_SAMPLES], input_32k)?;
         let out = self.model.run(tvec!(input.into()))?;
         Ok(out[LOGITS_OUTPUT]
-            .try_as_plain()?
+            .try_as_plain_ram()?
             .as_slice::<f32>()?
             .to_vec())
     }

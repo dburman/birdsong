@@ -604,3 +604,41 @@ One entry per non-obvious decision. Newest at the bottom. Format: Decision / Why
   and file ownership changes); a Debian package (more machinery than one binary and a unit need);
   static musl builds (tract's performance and the allocator differ from the tested build).
 
+## 35. 2026-10-02 — With Perch, only voices trigger the privacy filter
+
+- **Decision.** `detection.privacy_classes` chooses the classes that count as a person: `"all"`
+  (voices and body or activity sounds; BirdNET's default, as BirdNET-Pi) or `"voice"` (the 20
+  voice classes in `PERCH_VOICE_CLASSES`, or BirdNET's `Human vocal`; Perch's default). The rank
+  rule and neighbour masking are unchanged. `detection.privacy_min_confidence` (default 0) can
+  additionally require a score. `GET /api/v1/privacy` lists what the filter saw in the last 720
+  chunks (class names, ranks and scores; no audio), and `/health` and `/metrics` count the chunks
+  where a person class ranked within the cutoff, by class and by score.
+- **Why.** Measured on the first station (Perch `full`, `privacy_threshold = 1`, so 60 ranks):
+  - In 20.6 hours with nobody near the microphone, 60 % of chunks were masked (8 961 of 14 857).
+    Of the 6 149 chunks where a person class ranked within the cutoff, 99.8 % were body or
+    activity classes (`Walk_and_footsteps` 4 234, `Run` 1 260, `Hands` 382), never scored above
+    0.5; outdoors they fire on leaves, rain and animals on the ground. Voice classes: 9 chunks.
+  - In a test with a person speaking loudly 15 yards from the microphone for 30 seconds and then
+    5 feet from it for 30 seconds, a voice class (`Speech` or `Human_voice`) ranked 1 to 8 in
+    all 13 chunks (2 to 8 at 15 yards, 1 or 2 at 5 feet), with scores from 0.009 to 0.26. In
+    the 26 chunks around the test the best voice class ranked 173 to 1 114.
+  So voices are separated from everything else by rank, and the classes that caused the masking
+  are not voices. The filter exists to keep conversations out of the clips.
+- **Rejected.** A score threshold as the fix (speech scored as low as 0.009, below most of the
+  false footsteps, so any useful threshold lets speech through); removing the activity classes
+  altogether (some owners will want the stricter rule); changing BirdNET's default (it has three
+  `Human` classes among 6 522, and matching BirdNET-Pi is the point of that mode).
+
+
+## 36. 2026-11-05 — Runtime image on Debian trixie; the build stage stays on bookworm
+
+- **Decision.** The Docker runtime stage is `debian:trixie-slim` (ffmpeg 7.1). The Rust build
+  stage stays on `rust:1-bookworm`, so the binary still needs glibc 2.36 at most and the release
+  archives keep running on Pi OS bookworm (#34).
+- **Why.** Debian 12 (bookworm) left regular security support in June 2026; its LTS covers fewer
+  packages, and the runtime image's attack surface is mostly ffmpeg and its codec libraries. A
+  binary linked against an older glibc runs on a newer one, so the two stages can move
+  independently. The capture flags (`-rtsp_transport`, `-timeout`, `-rw_timeout`, `-re`) are
+  unchanged in ffmpeg 7.
+- **Rejected.** Moving the build stage to trixie too (glibc 2.41 would drop Pi OS bookworm for the
+  release archives); staying on bookworm-slim until the next Pi OS release.

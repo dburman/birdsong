@@ -49,13 +49,14 @@ RUN --mount=type=cache,target=/usr/local/cargo/registry,sharing=locked \
 FROM scratch AS binary
 COPY --from=build /birdsong /birdsong
 
-FROM debian:bookworm-slim
+FROM debian:trixie-slim
 LABEL org.opencontainers.image.title="birdsong" \
       org.opencontainers.image.description="Bird and wildlife sound detection (Perch v2 or BirdNET V2.4) with an HTTP API and dashboard" \
       org.opencontainers.image.source="https://github.com/dburman/birdsong" \
       org.opencontainers.image.licenses="MIT"
 
-# ffmpeg >= 5.0 captures ALSA devices and streams (Debian bookworm ships 5.1).
+# ffmpeg >= 5.0 captures ALSA devices and streams (Debian trixie ships 7.1). The binary is built
+# in bookworm (glibc 2.36) for the release archives and runs unchanged on trixie (DECISIONS #36).
 RUN set -eux; \
     apt-get update; \
     apt-get install -y --no-install-recommends ffmpeg ca-certificates; \

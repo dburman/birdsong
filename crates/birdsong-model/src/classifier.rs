@@ -85,7 +85,7 @@ impl Classifier for TractClassifier {
         let run = || -> TractResult<Vec<f32>> {
             let input = Tensor::from_shape(&[1, h, w, c], &spec)?;
             let out = self.model.run(tvec!(input.into()))?;
-            Ok(out[0].try_as_plain()?.as_slice::<f32>()?.to_vec())
+            Ok(out[0].try_as_plain_ram()?.as_slice::<f32>()?.to_vec())
         };
         run().map_err(|e| ModelError::Model {
             path: "<classifier>".into(),

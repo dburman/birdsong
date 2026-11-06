@@ -83,6 +83,31 @@ pub const PERCH_HUMAN_CLASSES: &[&str] = &[
     "Yell",
 ];
 
+/// The [`PERCH_HUMAN_CLASSES`] that are voices; the rest are body and activity sounds, which
+/// outdoors are mostly leaves, rain and animals on the ground.
+pub const PERCH_VOICE_CLASSES: &[&str] = &[
+    "Chatter",
+    "Cheering",
+    "Child_speech_and_kid_speaking",
+    "Chuckle_and_chortle",
+    "Conversation",
+    "Crowd",
+    "Crying_and_sobbing",
+    "Female_singing",
+    "Female_speech_and_woman_speaking",
+    "Giggle",
+    "Human_voice",
+    "Laughter",
+    "Male_singing",
+    "Male_speech_and_man_speaking",
+    "Screaming",
+    "Shout",
+    "Singing",
+    "Speech",
+    "Whispering",
+    "Yell",
+];
+
 /// One classifier output class.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Label {
@@ -92,6 +117,8 @@ pub struct Label {
     pub common: String,
     /// Counts as a person for the privacy filter.
     pub human: bool,
+    /// A person's voice (`detection.privacy_classes = "voice"` masks only these).
+    pub voice: bool,
     /// Not an animal: stored as a sound event.
     pub sound_event: bool,
 }
@@ -101,6 +128,11 @@ impl Label {
     /// `Human vocal_Human vocal`); for Perch, one of [`PERCH_HUMAN_CLASSES`].
     pub fn is_human(&self) -> bool {
         self.human
+    }
+
+    /// BirdNET's `Human vocal`; for Perch, one of [`PERCH_VOICE_CLASSES`].
+    pub fn is_voice(&self) -> bool {
+        self.voice
     }
 
     pub fn kind(&self) -> DetectionKind {
@@ -148,6 +180,7 @@ impl Labels {
                 scientific,
                 common,
                 human,
+                voice: raw.contains("Human vocal"),
                 sound_event,
             });
         }
@@ -193,6 +226,7 @@ impl Labels {
                 scientific: raw.to_string(),
                 common,
                 human: PERCH_HUMAN_CLASSES.contains(&raw),
+                voice: PERCH_VOICE_CLASSES.contains(&raw),
                 sound_event: event && !PERCH_ANIMAL_EVENTS.contains(&raw),
             });
         }
@@ -230,6 +264,7 @@ impl Labels {
                 scientific: (*scientific).to_string(),
                 common: common.unwrap_or(scientific).to_string(),
                 human: false,
+                voice: false,
                 sound_event: false,
             });
         }
@@ -397,6 +432,10 @@ mod tests {
         for name in PERCH_HUMAN_CLASSES.iter().chain(PERCH_ANIMAL_EVENTS) {
             assert!(l.index_of_scientific(name).is_some(), "{name}");
         }
+        for name in PERCH_VOICE_CLASSES {
+            assert!(PERCH_HUMAN_CLASSES.contains(name), "{name}");
+        }
+        assert_eq!(l.iter().filter(|x| x.is_voice()).count(), 20);
         assert_eq!(
             l.iter().filter(|x| x.sound_event).count(),
             198 - PERCH_ANIMAL_EVENTS.len()

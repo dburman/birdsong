@@ -49,7 +49,7 @@ fn main() -> anyhow::Result<()> {
         let per = t2.elapsed() / iters;
         let out = out.unwrap();
         let t: &Tensor = &out[0];
-        let v = t.try_as_plain()?.as_slice::<f32>()?;
+        let v = t.try_as_plain_ram()?.as_slice::<f32>()?;
         println!(
             "ran {iters}x: {per:?} per run; output shape {:?}; first values {:?}",
             t.shape(),

@@ -133,6 +133,11 @@ pub struct DetectionConfig {
     pub privacy_filter: bool,
     /// Percent `0..=100`; higher looks deeper into the ranking for human classes.
     pub privacy_threshold: f32,
+    /// A person class within the cutoff must also score at least this to mask the chunk.
+    /// `0.0` masks on rank alone (BirdNET-Pi).
+    pub privacy_min_confidence: f32,
+    /// Which person classes mask a chunk.
+    pub privacy_classes: PrivacyClasses,
     /// Detections of a species needed within `confirmation_window_seconds` before any are
     /// stored. `1` stores every detection immediately (BirdNET-Pi behaviour).
     pub min_detections: usize,
@@ -164,6 +169,8 @@ impl Default for DetectionConfig {
             species_min_confidence: std::collections::BTreeMap::new(),
             privacy_filter: true,
             privacy_threshold: 0.0,
+            privacy_min_confidence: 0.0,
+            privacy_classes: PrivacyClasses::Voice,
             min_detections: 2,
             confirmation_window_seconds: 30.0,
             confirmation_exempt_species: Vec::new(),
@@ -233,6 +240,7 @@ impl ModelKind {
                 ("detection.min_confidence", Number(0.7)),
                 ("detection.min_detections", Count(1)),
                 ("detection.confirmation_window_seconds", Number(15.0)),
+                ("detection.privacy_classes", Text("all")),
             ],
             // Thresholds from comparing Perch with a BirdNET-Pi station (docs/MODEL.md).
             Self::PerchV2 => &[
@@ -243,6 +251,8 @@ impl ModelKind {
                 ("detection.min_confidence", Number(0.5)),
                 ("detection.min_detections", Count(2)),
                 ("detection.confirmation_window_seconds", Number(30.0)),
+                // Perch's body and activity classes fire on leaves and rain (decision #35).
+                ("detection.privacy_classes", Text("voice")),
             ],
         }
     }
@@ -288,6 +298,26 @@ fn kind_of(table: &toml::Table) -> Result<ModelKind, ConfigError> {
 
 /// What the location filter does with Perch species that BirdNET's location model does not know.
 ///
+/// Which person classes the privacy filter counts. Serialised as `"all"` / `"voice"`.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum PrivacyClasses {
+    /// Voices and body or activity sounds (BirdNET-Pi: every `Human` class).
+    #[default]
+    All,
+    /// Voices only: speech, singing, shouting, laughter.
+    Voice,
+}
+
+impl PrivacyClasses {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::All => "all",
+            Self::Voice => "voice",
+        }
+    }
+}
+
 /// Serialised as `"allow"` / `"block"`.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
@@ -677,6 +707,12 @@ impl Config {
                 d.privacy_threshold
             ));
         }
+        if !(0.0..=1.0).contains(&d.privacy_min_confidence) {
+            errors.push(format!(
+                "detection.privacy_min_confidence {} not in 0..=1",
+                d.privacy_min_confidence
+            ));
+        }
 
         if !(1..=20).contains(&d.min_detections) {
             errors.push(format!(
@@ -806,6 +842,14 @@ device = "hw:1,0"
             ),
             (0.7, 1)
         );
+        assert_eq!(birdnet.detection.privacy_classes, PrivacyClasses::All);
+        let perch = Config::from_toml(MINIMAL).unwrap();
+        assert_eq!(perch.detection.privacy_classes, PrivacyClasses::Voice);
+        let strict = Config::from_toml(&format!(
+            "{MINIMAL}\n[detection]\nprivacy_classes = \"all\""
+        ))
+        .unwrap();
+        assert_eq!(strict.detection.privacy_classes, PrivacyClasses::All);
 
         // Explicit settings win over the model's defaults.
         let tuned = Config::from_toml(&format!(

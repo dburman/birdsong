@@ -54,7 +54,7 @@ impl MetaModel {
             let input =
                 Tensor::from_shape(&[1, 3], &[latitude as f32, longitude as f32, week as f32])?;
             let out = self.model.run(tvec!(input.into()))?;
-            Ok(out[0].try_as_plain()?.as_slice::<f32>()?.to_vec())
+            Ok(out[0].try_as_plain_ram()?.as_slice::<f32>()?.to_vec())
         };
         run().map_err(|e| ModelError::Model {
             path: "<meta-model>".into(),

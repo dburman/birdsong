@@ -198,6 +198,18 @@ async fn health_reports_status_and_stats() {
 }
 
 #[tokio::test]
+async fn privacy_reports_settings_and_recent_chunks() {
+    let env = env().await;
+    let (status, body) = json(&env.router, "/api/v1/privacy").await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(body["privacy_filter"], true);
+    assert_eq!(body["privacy_classes"], "voice");
+    assert_eq!(body["rank_cutoff"], 10);
+    assert_eq!(body["privacy_min_confidence"], 0.0);
+    assert_eq!(body["recent"].as_array().unwrap().len(), 0);
+}
+
+#[tokio::test]
 async fn list_shape_and_defaults() {
     let env = env().await;
     let (status, page) = json(&env.router, "/api/v1/detections").await;
@@ -905,9 +917,10 @@ async fn prometheus_metrics() {
     let text = String::from_utf8(body).unwrap();
     assert!(text.contains("birdsong_chunks_processed_total 0"), "{text}");
     assert!(
-        text.contains(
-            r#"birdsong_build_info{version="0.1.0",model="birdnet-v2.4",station="Test station"} 1"#
-        ),
+        text.contains(&format!(
+            r#"birdsong_build_info{{version="{}",model="birdnet-v2.4",station="Test station"}} 1"#,
+            env!("CARGO_PKG_VERSION")
+        )),
         "{text}"
     );
     assert!(text.contains(r#"birdsong_species_detections{scientific_name="Cardinalis cardinalis",common_name="Northern Cardinal",kind="animal"} 17"#), "{text}");

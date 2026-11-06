@@ -1,6 +1,6 @@
 //! From raw logits to detections, matching BirdNET-Pi (`BUILD_PLAN.md` §7, `docs/DECISIONS.md` #6, #8).
 
-use birdsong_core::config::DetectionConfig;
+use birdsong_core::config::{DetectionConfig, PrivacyClasses};
 use birdsong_core::Detection;
 use chrono::{DateTime, Utc};
 
@@ -39,6 +39,11 @@ pub struct PostprocessConfig {
     pub privacy_filter: bool,
     /// BirdNET-Pi: `max(10, int(6000 × privacy_threshold / 100))` ranks are checked for `Human`.
     pub human_rank_cutoff: usize,
+    /// A person class within the cutoff must also score at least this (`0.0`: rank alone, as
+    /// BirdNET-Pi).
+    pub privacy_min_confidence: f32,
+    /// Only voices mask a chunk; body and activity sounds do not.
+    pub privacy_voice_only: bool,
     /// Confidence is a softmax over all classes (Perch) instead of a per-class sigmoid (BirdNET);
     /// `sensitivity` is then not used.
     pub softmax: bool,
@@ -52,6 +57,8 @@ impl PostprocessConfig {
             top_n_per_chunk: d.top_n_per_chunk,
             privacy_filter: d.privacy_filter,
             human_rank_cutoff: human_rank_cutoff(d.privacy_threshold),
+            privacy_min_confidence: d.privacy_min_confidence,
+            privacy_voice_only: d.privacy_classes == PrivacyClasses::Voice,
             softmax: false,
         }
     }
@@ -91,10 +98,25 @@ pub struct ChunkAnalysis {
     pub source_id: String,
     /// Detections that passed every filter, best first. Empty when `masked`.
     pub detections: Vec<Detection>,
-    /// A `Human*` class ranked within the privacy cutoff (before species filtering).
+    /// The best-ranked person class, whether or not it was enough to mask the chunk.
+    pub human: Option<HumanEvidence>,
+    /// The best-ranked voice class (the same as `human` when that is a voice).
+    pub voice: Option<HumanEvidence>,
+    /// A person class the privacy filter counts (`privacy_classes`) passed the rule (rank within
+    /// the cutoff and at least `privacy_min_confidence`), before species filtering.
     pub human_present: bool,
     /// Blanked by the privacy rule (this chunk or a neighbour had a human). No clip must be saved.
     pub masked: bool,
+}
+
+/// The highest-ranked class that counts as a person ([`crate::Label::is_human`]) in one chunk.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct HumanEvidence {
+    pub class_index: usize,
+    /// 1 = the chunk's top class.
+    pub rank: usize,
+    /// On the classifier's scale: softmax (Perch) or sigmoid with sensitivity (BirdNET).
+    pub confidence: f32,
 }
 
 /// Class indices sorted by logit, best first.
@@ -140,16 +162,28 @@ pub fn analyze_chunk_with(
 ) -> ChunkAnalysis {
     debug_assert_eq!(logits.len(), labels.len());
     let ranked = ranking(logits);
+    let probs = cfg.softmax.then(|| softmax(logits));
 
-    let human_present = cfg.privacy_filter
-        && ranked
+    let best = |is: &dyn Fn(&crate::Label) -> bool| {
+        ranked
             .iter()
-            .take(cfg.human_rank_cutoff)
-            .any(|&i| labels.get(i).is_some_and(Label_is_human));
+            .position(|&i| labels.get(i).is_some_and(is))
+            .map(|pos| HumanEvidence {
+                class_index: ranked[pos],
+                rank: pos + 1,
+                confidence: score(logits, probs.as_deref(), cfg, ranked[pos]),
+            })
+    };
+    let human = best(&crate::Label::is_human);
+    let voice = best(&crate::Label::is_voice);
+    let counted = if cfg.privacy_voice_only { voice } else { human };
+    let human_present = cfg.privacy_filter
+        && counted.is_some_and(|h| {
+            h.rank <= cfg.human_rank_cutoff && h.confidence >= cfg.privacy_min_confidence
+        });
 
     let mut detections = Vec::new();
     if !human_present {
-        let probs = cfg.softmax.then(|| softmax(logits));
         for &i in ranked
             .iter()
             .filter(|&&i| filter.is_allowed(i))
@@ -179,14 +213,11 @@ pub fn analyze_chunk_with(
         start_at: ctx.start_at,
         source_id: ctx.source_id.clone(),
         detections,
+        human,
+        voice,
         human_present,
         masked: human_present,
     }
-}
-
-#[allow(non_snake_case)]
-fn Label_is_human(l: &crate::Label) -> bool {
-    l.is_human()
 }
 
 /// BirdNET-Pi blanks the chunks *next to* a human chunk as well. On a live stream the next chunk
@@ -274,6 +305,8 @@ mod tests {
             top_n_per_chunk: 2,
             privacy_filter: true,
             human_rank_cutoff: 2,
+            privacy_min_confidence: 0.0,
+            privacy_voice_only: false,
             softmax: false,
         }
     }
@@ -353,11 +386,53 @@ mod tests {
         // Human ranks 3rd → not within cutoff.
         let r = analyze_chunk(&[3.0, 2.9, 0.0, 0.0, 2.5], &l, &all, &cfg(), &ctx());
         assert!(!r.human_present && r.detections.len() == 2);
-        // Filter off → never masked.
+        // Filter off → never masked, but the evidence is still reported.
         let mut c = cfg();
         c.privacy_filter = false;
         let r = analyze_chunk(&[3.0, 0.0, 0.0, 0.0, 2.5], &l, &all, &c, &ctx());
         assert!(!r.human_present && !r.masked);
+        let h = r.human.unwrap();
+        assert_eq!((h.class_index, h.rank), (4, 2));
+        assert!((h.confidence - SigmoidSensitivity::from_user_value(1.0).apply(2.5)).abs() < 1e-6);
+    }
+
+    #[test]
+    fn voice_only_ignores_activity_sounds() {
+        let l =
+            Labels::parse("A_a\nB_b\nHuman non-vocal_Human non-vocal\nHuman vocal_Human vocal\n")
+                .unwrap();
+        let all = SpeciesFilter::allow_all(4);
+        let mut c = cfg();
+        // Non-vocal ranks 2nd, vocal 4th: masked when every person class counts.
+        let logits = [3.0, 0.0, 2.5, -1.0];
+        let r = analyze_chunk(&logits, &l, &all, &c, &ctx());
+        assert!(r.masked);
+        assert_eq!((r.human.unwrap().rank, r.voice.unwrap().rank), (2, 4));
+        // Voices only: not masked, A is reported, and both are still described.
+        c.privacy_voice_only = true;
+        let r = analyze_chunk(&logits, &l, &all, &c, &ctx());
+        assert!(!r.human_present && !r.masked);
+        assert_eq!(r.detections[0].scientific_name, "A");
+        assert_eq!((r.human.unwrap().rank, r.voice.unwrap().rank), (2, 4));
+        // A voice in 2nd place masks either way.
+        let r = analyze_chunk(&[3.0, 0.0, -1.0, 2.5], &l, &all, &c, &ctx());
+        assert!(r.human_present && r.masked);
+    }
+
+    #[test]
+    fn privacy_min_confidence_ignores_faint_people() {
+        let l = labels();
+        let all = SpeciesFilter::allow_all(5);
+        let mut c = cfg();
+        c.privacy_min_confidence = 0.9;
+        // Human ranks 2nd with sigmoid(2.5) = 0.92 → masked.
+        let r = analyze_chunk(&[3.0, 0.0, 0.0, 0.0, 2.5], &l, &all, &c, &ctx());
+        assert!(r.human_present && r.masked);
+        // Human ranks 2nd with sigmoid(1.0) = 0.73 → below 0.9, not masked; A is reported.
+        let r = analyze_chunk(&[3.0, 0.0, 0.0, 0.0, 1.0], &l, &all, &c, &ctx());
+        assert!(!r.human_present && !r.masked);
+        assert_eq!(r.human.unwrap().rank, 2);
+        assert_eq!(r.detections[0].scientific_name, "A");
     }
 
     #[test]
@@ -406,6 +481,8 @@ mod tests {
             start_at,
             source_id: "mic0".into(),
             detections: if human { vec![] } else { vec![det] },
+            human: None,
+            voice: None,
             human_present: human,
             masked: human,
         }

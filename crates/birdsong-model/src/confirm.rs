@@ -256,6 +256,8 @@ mod tests {
                     clip_path: None,
                 })
                 .collect(),
+            human: None,
+            voice: None,
             human_present: false,
             masked: false,
         }

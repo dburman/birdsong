@@ -28,7 +28,7 @@ use tokio_util::sync::CancellationToken;
 use crate::birdweather::{upload_task, BirdWeatherClient, Station, UploadPolicy};
 use crate::clips::{clip_task, ClipJob, ClipMsg, ClipSettings};
 use crate::queue::{Backpressure, ChunkQueue, ConsumerGuard, PushOutcome, QueueItem};
-use crate::stats::{PipelineStats, StatsSnapshot};
+use crate::stats::{PersonClass, PipelineStats, PrivacySample, StatsSnapshot};
 
 /// Chunks waiting for inference, across all sources.
 pub const QUEUE_CAPACITY: usize = 4;
@@ -491,6 +491,42 @@ fn inference_worker(
                     &ctx,
                     &threshold_for,
                 );
+                if privacy {
+                    let describe = |h: birdsong_model::HumanEvidence| PersonClass {
+                        class: bundle
+                            .labels
+                            .get(h.class_index)
+                            .map(|l| l.raw.clone())
+                            .unwrap_or_default(),
+                        rank: h.rank,
+                        confidence: h.confidence,
+                    };
+                    stats.privacy_sample(PrivacySample {
+                        at: chunk.start_at,
+                        source_id: chunk.source_id.to_string(),
+                        person: analysis.human.map(describe),
+                        voice: analysis.voice.map(describe),
+                        person_present: analysis.human_present,
+                    });
+                }
+                if let Some(h) = analysis
+                    .human
+                    .filter(|h| privacy && h.rank <= bundle.postprocess.human_rank_cutoff)
+                {
+                    let class = bundle
+                        .labels
+                        .get(h.class_index)
+                        .map_or("", |l| l.raw.as_str());
+                    stats.person_ranked(class, h.confidence);
+                    tracing::debug!(
+                        source = %chunk.source_id,
+                        class,
+                        rank = h.rank,
+                        confidence = h.confidence,
+                        masked = analysis.human_present,
+                        "person class within the privacy cutoff"
+                    );
+                }
                 if let Some(d) = dynamic.as_mut() {
                     if !analysis.human_present {
                         for det in &analysis.detections {

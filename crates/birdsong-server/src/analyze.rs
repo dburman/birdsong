@@ -127,6 +127,8 @@ pub struct AnalysisReport {
     pub overlap_seconds: f32,
     pub window_seconds: f32,
     pub privacy_filter: bool,
+    /// `"all"` or `"voice"`: the person classes that mask a chunk.
+    pub privacy_classes: &'static str,
     pub min_detections: usize,
     pub confirmation_window_seconds: f32,
     pub dynamic_threshold: bool,
@@ -146,9 +148,20 @@ pub struct ChunkReport {
     pub human_present: bool,
     /// Blanked by the privacy rule (this chunk or a neighbour had a human).
     pub masked: bool,
+    /// The best-ranked person class, whether or not it masked the chunk.
+    pub human: Option<HumanReport>,
+    /// The best-ranked voice class.
+    pub voice: Option<HumanReport>,
     pub top: Vec<ScoreReport>,
     /// What `birdsong run` would store for this chunk.
     pub detections: Vec<DetectionReport>,
+}
+
+#[derive(Clone, Debug, Serialize)]
+pub struct HumanReport {
+    pub class_name: String,
+    pub rank: usize,
+    pub confidence: f32,
 }
 
 #[derive(Clone, Debug, Serialize)]
@@ -300,6 +313,15 @@ pub fn analyze_samples(
             }
         }
         let start = seconds(chunk.start_at - base);
+        let describe = |h: birdsong_model::HumanEvidence| HumanReport {
+            class_name: bundle
+                .labels
+                .get(h.class_index)
+                .map(|l| l.raw.clone())
+                .unwrap_or_default(),
+            rank: h.rank,
+            confidence: h.confidence,
+        };
         rows.push(ChunkReport {
             index,
             start_seconds: start,
@@ -307,6 +329,8 @@ pub fn analyze_samples(
             padded: chunk.padded,
             human_present: analysis.human_present,
             masked: false,
+            human: analysis.human.map(describe),
+            voice: analysis.voice.map(describe),
             top,
             detections: Vec::new(),
         });
@@ -390,6 +414,7 @@ pub fn analyze_samples(
         overlap_seconds: cfg.detection.overlap_seconds,
         window_seconds,
         privacy_filter: privacy,
+        privacy_classes: cfg.detection.privacy_classes.as_str(),
         min_detections: cfg.detection.min_detections,
         confirmation_window_seconds: cfg.detection.confirmation_window_seconds,
         dynamic_threshold: cfg.detection.dynamic_threshold,
@@ -467,10 +492,17 @@ pub fn render_text(r: &AnalysisReport) -> String {
             );
         }
         if c.masked {
-            let why = if c.human_present {
-                "human sound in this chunk"
+            let counted = if r.privacy_classes == "voice" {
+                &c.voice
             } else {
-                "human sound in a neighbouring chunk"
+                &c.human
+            };
+            let why = match (counted, c.human_present) {
+                (Some(h), true) => format!(
+                    "human sound in this chunk: {} ranked {} at {:.3}",
+                    h.class_name, h.rank, h.confidence
+                ),
+                _ => "human sound in a neighbouring chunk".into(),
             };
             let _ = writeln!(out, "  (privacy filter: nothing reported, {why})");
         }

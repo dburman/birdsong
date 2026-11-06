@@ -67,6 +67,28 @@ pub async fn metrics(State(state): State<AppState>) -> ApiResult<Response> {
         "Windows blanked by the human-voice privacy filter.",
         s.masked_chunks,
     );
+    let _ = writeln!(
+        out,
+        "# HELP birdsong_privacy_person_chunks_total Windows with a person class within the privacy rank cutoff, by that class's confidence (above the next lower bucket, at most max_confidence).\n# TYPE birdsong_privacy_person_chunks_total counter"
+    );
+    for b in &s.privacy_person.by_confidence {
+        let _ = writeln!(
+            out,
+            "birdsong_privacy_person_chunks_total{{max_confidence=\"{}\"}} {}",
+            b.up_to, b.chunks
+        );
+    }
+    let _ = writeln!(
+        out,
+        "# HELP birdsong_privacy_person_class_chunks_total Windows with a person class within the privacy rank cutoff, by class.\n# TYPE birdsong_privacy_person_class_chunks_total counter"
+    );
+    for (class, n) in &s.privacy_person.by_class {
+        let _ = writeln!(
+            out,
+            "birdsong_privacy_person_class_chunks_total{{class=\"{}\"}} {n}",
+            label(class)
+        );
+    }
     metric(
         &mut out,
         "birdsong_audio_gaps_total",

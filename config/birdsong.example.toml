@@ -34,6 +34,9 @@ exclude_species = []            # scientific names never reported
 # species_min_confidence = { "Vireo olivaceus" = 0.7 }
 privacy_filter = true           # BirdNET-Pi human-voice mask
 privacy_threshold = 0.0         # percent 0..100; higher is stricter
+# privacy_min_confidence = 0.0  # a person class must also score this; 0 = rank alone (BirdNET-Pi)
+# privacy_classes = "voice"     # "voice": voices only (Perch default); "all": also body and
+                                # activity sounds (BirdNET default, as BirdNET-Pi)
 
 # Repeat confirmation (on for Perch by default, off for BirdNET) and dynamic thresholds (off).
 # min_detections = 2            # hits of a species needed within the window before any are stored

@@ -89,14 +89,22 @@ curl -s "$PI/api/v1/health"
 ```json
 {
   "status": "ok",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "uptime_s": 3600,
   "station": "Backyard",
   "model_id": "birdnet-v2.4",
   "last_chunk_at": "2026-05-15T10:59:57.000000Z",
   "seconds_since_last_chunk": 3.1,
   "stats": {
-    "chunks_processed": 1200, "chunks_dropped": 0, "masked_chunks": 4, "gaps": 0,
+    "chunks_processed": 1200, "chunks_dropped": 0, "masked_chunks": 4,
+    "privacy_person": {
+      "by_confidence": [{"up_to": 0.001, "chunks": 0}, {"up_to": 0.01, "chunks": 0},
+                        {"up_to": 0.05, "chunks": 0}, {"up_to": 0.1, "chunks": 0},
+                        {"up_to": 0.25, "chunks": 0}, {"up_to": 0.5, "chunks": 0},
+                        {"up_to": 1.0, "chunks": 2}],
+      "by_class": {"Human vocal_Human vocal": 2}
+    },
+    "gaps": 0,
     "clock_reanchors": 0, "clock_samples_inserted": 24192, "clock_samples_dropped": 0,
     "clock_correction_ppm": 140.0,
     "detections": 57, "unconfirmed_detections": 0, "inference_errors": 0, "store_errors": 0,
@@ -113,6 +121,13 @@ means the computer cannot keep up with inference. `unconfirmed_detections` count
 dropped because their species never repeated inside `detection.confirmation_window_seconds`; it
 stays `0` unless `detection.min_detections` is raised above `1`.
 
+`masked_chunks` counts windows blanked by the privacy filter: a window where a person class
+passed the rule, and the windows either side of it. `privacy_person` counts the windows where a
+person class ranked within the privacy cutoff (`detection.privacy_threshold`), by that class's
+confidence (above the previous bucket's `up_to`, at most its own) and by class name, whether or
+not they were masked. It shows how many windows a given `detection.privacy_min_confidence` would
+still mask.
+
 The `clock_*` fields describe the microphone's clock. A capture clock rarely runs at exactly
 48 kHz; Birdsong keeps its timeline in step with the computer's clock by repeating or skipping
 single samples (`clock_samples_inserted` / `clock_samples_dropped`, at most 1 in 1 000), and
@@ -121,6 +136,36 @@ single samples (`clock_samples_inserted` / `clock_samples_dropped`, at most 1 in
 jumped to the wall clock instead: a stalled or restarted source, or drift faster than the
 correction can follow. Each re-anchor also counts in `gaps`, which counts every discontinuity in
 the audio timeline; `gaps` minus `clock_reanchors` is audio that went missing.
+
+### `GET /api/v1/privacy`
+
+What the privacy filter saw in the newest chunks (up to 720, an hour of 5 s windows; oldest
+first), for checking that it masks people and nothing else. Only class names and scores are kept,
+never audio, and the log is lost on restart.
+
+```json
+{
+  "privacy_filter": true,
+  "privacy_classes": "all",
+  "rank_cutoff": 10,
+  "privacy_min_confidence": 0.0,
+  "recent": [
+    {
+      "at": "2026-05-15T10:59:57.000000Z",
+      "source_id": "mic0",
+      "person": {"class": "Walk_and_footsteps", "rank": 7, "confidence": 0.012},
+      "voice": {"class": "Speech", "rank": 412, "confidence": 0.00004},
+      "person_present": true
+    }
+  ]
+}
+```
+
+`person` is the best-ranked person class of any kind and `voice` the best-ranked voice class
+(rank 1 is the chunk's top class). `person_present` is the filter's verdict for that chunk: the
+class counted by `detection.privacy_classes` ranked within `rank_cutoff` and scored at least
+`privacy_min_confidence`. A chunk with `person_present` is masked together with the chunk before
+and after it.
 
 ### `GET /api/v1/detections`
 
@@ -331,12 +376,14 @@ birdsong_inference_seconds 0.312
 birdsong_seconds_since_last_chunk 1.4
 birdsong_clip_bytes 25318044
 birdsong_species_detections{scientific_name="Poecile atricapillus",common_name="Black-capped Chickadee",kind="animal"} 42
-birdsong_build_info{version="0.1.0",model="birdnet-v2.4",station="Backyard"} 1
+birdsong_build_info{version="0.2.0",model="birdnet-v2.4",station="Backyard"} 1
 ```
 
 `birdsong_species_detections` has a `kind` label (`animal` or `sound_event`).
 
 Also exported: `birdsong_uptime_seconds`, `birdsong_masked_chunks_total`,
+`birdsong_privacy_person_chunks_total{max_confidence}` and
+`birdsong_privacy_person_class_chunks_total{class}` (the two halves of `privacy_person` above),
 `birdsong_audio_gaps_total`, `birdsong_detections_total`, `birdsong_inference_errors_total`,
 `birdsong_store_errors_total`, `birdsong_clips_written_total`, `birdsong_clip_errors_total`,
 `birdsong_unconfirmed_detections_total`, `birdsong_clock_reanchors_total`,

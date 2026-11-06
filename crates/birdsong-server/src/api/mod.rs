@@ -55,6 +55,7 @@ pub struct AppState {
 pub fn router(state: AppState) -> Router {
     let api = Router::new()
         .route("/health", get(insights::health))
+        .route("/privacy", get(insights::privacy))
         .route("/detections", get(detections::list))
         .route("/detections/latest", get(detections::latest))
         .route("/detections/{id}", get(detections::get_one))

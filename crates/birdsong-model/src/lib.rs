@@ -32,7 +32,7 @@ pub use labels::{
 pub use meta::MetaModel;
 pub use perch::{PerchClassifier, PERCH_V2_MODEL_ID, PERCH_WINDOW_SECONDS};
 pub use postprocess::{
-    analyze_chunk, analyze_chunk_with, softmax, top_scores, ChunkAnalysis, ChunkContext,
-    NeighbourMask, PostprocessConfig, SigmoidSensitivity,
+    analyze_chunk, analyze_chunk_with, human_rank_cutoff, softmax, top_scores, ChunkAnalysis,
+    ChunkContext, HumanEvidence, NeighbourMask, PostprocessConfig, SigmoidSensitivity,
 };
 pub use species_filter::SpeciesFilter;

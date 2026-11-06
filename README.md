@@ -1,28 +1,39 @@
 # Birdsong
 
-Birdsong listens to a microphone, recognises birds and other animals by their sounds, and keeps a
-record you can browse, play back and query. It is a from-scratch Rust replacement for the bird
-detection of [BirdNET-Pi](https://github.com/Nachtzuster/BirdNET-Pi), built to run around the clock
-on a Raspberry Pi.
+Birdsong turns a Raspberry Pi and a USB microphone into an always-on wildlife listening station.
+It identifies birds, frogs, insects and mammals by their calls, keeps the audio of every detection,
+and gives you a dashboard to browse and review what it heard and an API to take the data elsewhere.
+It is one Rust binary; besides the model files it needs only `ffmpeg`.
 
-- **Two classifiers.** [Google Perch v2](https://www.kaggle.com/models/google/bird-vocalization-classifier)
-  (default: about 14 600 species of birds, frogs, insects and mammals) or BirdNET V2.4 (the model
-  BirdNET-Pi uses). One setting switches between them.
-- **Location-aware.** The [BirdNET Geomodel](https://github.com/birdnet-team/geomodel) keeps only
-  species expected at the station for the time of year, so a koala is not reported in Minnesota.
-- **A dashboard** with the latest birds, activity by hour for every species, recent detections with
-  audio clips and spectrograms, links to Cornell Lab's
-  [All About Birds](https://www.allaboutbirds.org) (birds) and [iNaturalist](https://www.inaturalist.org)
-  (other animals), and ✓ / ✗ buttons to review detections.
-- **Tunable.** Repeat confirmation, dynamic thresholds, per-species thresholds suggested from your
-  reviews, a human-voice privacy filter, and non-animal sounds (engines, rain, music) kept apart as
-  sound events.
-- **An HTTP API** for ingesting detections with a cursor, a live event stream, charts data and
-  Prometheus metrics. See [docs/API.md](docs/API.md).
-- **Audio is kept for a rolling window** you configure (age and total size), as lossless FLAC.
-- **[BirdWeather](https://app.birdweather.com) uploads**, birds only.
-- **Pure Rust**, `unsafe` forbidden in every crate, no FFI: models run in
-  [tract](https://github.com/sonos/tract); audio capture uses the `ffmpeg` executable.
+- **More than birds.** [Google Perch v2](https://www.kaggle.com/models/google/bird-vocalization-classifier)
+  recognises about 14 600 species of birds, frogs, insects and mammals. The
+  [BirdNET Geomodel](https://github.com/birdnet-team/geomodel) narrows them to what is expected at
+  your location for the time of year, so a koala is not reported in Minnesota. BirdNET V2.4 is
+  available too, one setting away.
+- **The whole soundscape.** About 200 non-animal sounds (engines, rain, music, sirens) are
+  recognised and kept apart from the animals as sound events, so they explain a quiet morning
+  instead of crowding the bird charts, and double as a record of noise.
+- **Learns from your listening.** Mark detections ✓ or ✗ in the dashboard and Birdsong reports
+  each species' precision on your station, with a suggested threshold for it. Repeat confirmation
+  stops one-off false positives, and dynamic thresholds pick up the quieter calls of a bird that
+  is clearly nearby.
+- **Keeps conversations private.** When the classifier hears someone speaking, that window and the
+  ones either side of it are dropped, so no clip of a conversation is ever saved. With Perch only
+  voices trigger it: field measurements showed its footstep and hand classes firing on leaves and
+  rain. A privacy log shows what the filter heard.
+- **Built to run unattended.** It follows the microphone's clock drift a sample at a time (the
+  first station's USB microphone ran 140 ppm slow), keeps audio for a rolling window by age and
+  total size as lossless FLAC, and reports its health and Prometheus metrics. It installs as a
+  systemd service or runs in Docker.
+- **A dashboard** with the latest detections, activity by hour for every species, audio clips and
+  spectrograms, and links to Cornell Lab's [All About Birds](https://www.allaboutbirds.org) (birds)
+  and [iNaturalist](https://www.inaturalist.org) (other animals).
+- **Easy to integrate.** Read detections with a cursor or a live Server-Sent Events stream, and
+  fetch chart data; see [docs/API.md](docs/API.md). Birds can also be uploaded to
+  [BirdWeather](https://app.birdweather.com).
+- **Small and safe.** Pure Rust, `unsafe` forbidden in every crate, no FFI. The models run in
+  [tract](https://github.com/sonos/tract), and the dashboard is compiled into the binary with no
+  third-party JavaScript.
 
 ## Quick start on a Raspberry Pi
 
@@ -31,7 +42,7 @@ USB microphone. Download the `aarch64` archive from the
 [releases page](https://github.com/dburman/birdsong/releases), then on the Pi:
 
 ```bash
-tar xzf birdsong-v0.1.0-aarch64-unknown-linux-gnu.tar.gz && cd birdsong-v0.1.0-aarch64-unknown-linux-gnu
+tar xzf birdsong-v0.2.0-aarch64-unknown-linux-gnu.tar.gz && cd birdsong-v0.2.0-aarch64-unknown-linux-gnu
 ```
 
 ```bash
@@ -45,7 +56,7 @@ Geomodel files (430 MB), and starts the `birdsong` service. The dashboard is the
 
 ## How it performs
 
-Measured on a Raspberry Pi 4 Model B (8 GB), one core, next to a running BirdNET-Pi station:
+Measured on a Raspberry Pi 4 Model B (8 GB), one core:
 
 | Classifier | Per analysis window | Faster than real time | Memory |
 |------------|--------------------:|----------------------:|-------:|
@@ -53,11 +64,13 @@ Measured on a Raspberry Pi 4 Model B (8 GB), one core, next to a running BirdNET
 | Perch v2, regional (999 classes) | 1.7 s per 5 s | 2.9× | 245 MiB |
 | Perch v2, full (14 795 classes) | 2.7 s per 5 s | 1.9× | 1.1 GiB |
 
-On 317 clips saved by that BirdNET-Pi station, Birdsong's BirdNET reported the same species on
-every one (median confidence difference 0.0004). Running side by side for 24 hours, the two
-recorded nearly the same number of detections per species (Red-breasted Nuthatch 251 vs 233, Hairy
-Woodpecker 84 vs 82). Perch reports several times more; whether the extra ones are quiet calls
-BirdNET misses or false positives still needs listening. Details in [docs/MODEL.md](docs/MODEL.md).
+The BirdNET classifier is checked against the reference implementation. On 317 clips saved by a
+[BirdNET-Pi](https://github.com/Nachtzuster/BirdNET-Pi) station running on the same Pi, Birdsong
+reported the same species on every clip (median confidence difference 0.0004). Over 24 hours side
+by side, the two recorded nearly the same number of detections per species (Red-breasted Nuthatch
+251 vs 233, Hairy Woodpecker 84 vs 82). Perch reports several times more. Whether the extra ones
+are quiet calls BirdNET misses or false positives still needs listening, and that is what the
+dashboard's reviews are for. Details in [docs/MODEL.md](docs/MODEL.md).
 
 ## Models and licences
 
@@ -103,6 +116,7 @@ docker buildx build --platform linux/arm64 --target binary --output type=local,d
 ## Acknowledgements
 
 [BirdNET-Pi](https://github.com/Nachtzuster/BirdNET-Pi) and
-[BirdNET-Go](https://github.com/tphakala/birdnet-go), whose behaviour Birdsong follows and compares
-against; the [BirdNET](https://birdnet.cornell.edu) team for BirdNET and the Geomodel; Google
+[BirdNET-Go](https://github.com/tphakala/birdnet-go), the stations that showed what this kind of
+project can be and that Birdsong's BirdNET mode is checked against; the
+[BirdNET](https://birdnet.cornell.edu) team for BirdNET and the Geomodel; Google
 Research for Perch; and [tract](https://github.com/sonos/tract) for running them in Rust.
